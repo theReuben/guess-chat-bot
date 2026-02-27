@@ -1,0 +1,16 @@
+# Secrets / credentials
+service_account.json
+.env
+
+# State
+state.json
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/

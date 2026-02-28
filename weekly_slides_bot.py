@@ -599,8 +599,8 @@ async def generate_slides(client: discord.Client) -> None:
     if channel is None:
         try:
             channel = await client.fetch_channel(DISCORD_CHANNEL_ID)
-        except discord.HTTPException:
-            channel = None
+        except discord.HTTPException as exc:
+            print(f"[warn] fetch_channel({DISCORD_CHANNEL_ID}) failed: {exc}")
     if channel is None:
         print(f"[error] Could not find channel {DISCORD_CHANNEL_ID}")
         return
@@ -706,8 +706,8 @@ async def generate_slides(client: discord.Client) -> None:
     if results_channel is None:
         try:
             results_channel = await client.fetch_channel(DISCORD_RESULTS_CHANNEL_ID)
-        except discord.HTTPException:
-            results_channel = None
+        except discord.HTTPException as exc:
+            print(f"[warn] fetch_channel({DISCORD_RESULTS_CHANNEL_ID}) failed: {exc}")
     if results_channel is None:
         print(f"[error] Could not find results channel {DISCORD_RESULTS_CHANNEL_ID}")
     else:

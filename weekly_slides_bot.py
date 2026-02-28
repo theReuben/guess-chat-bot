@@ -511,12 +511,27 @@ async def generate_slides(client: discord.Client) -> None:
 
     # --- Collect SUBMISSION messages after the marker ---
     all_submissions: list[dict] = []
+    _member_cache: dict[int, discord.Member | None] = {}
     async for msg in channel.history(limit=1000, after=marker_msg):
         if msg.content.upper().startswith(SUBMISSION_PREFIX):
             body = msg.content[len(SUBMISSION_PREFIX):].strip() or "(image submission)"
             images = [a.url for a in msg.attachments if a.content_type and a.content_type.startswith("image/")]
-            # msg.author in a guild channel is already a Member with the correct server nickname
-            author_name = msg.author.display_name
+            # Resolve the guild Member to get the server-specific display name (nickname).
+            # channel.history() uses the REST API which does not reliably include partial
+            # member data, so msg.author may be a User (no nick). We use get_member() for
+            # a cache hit and fall back to fetch_member() (a REST call that works without
+            # the privileged members intent) to get the server-level display name.
+            uid = msg.author.id
+            if uid not in _member_cache and msg.guild is not None:
+                member: discord.Member | None = msg.guild.get_member(uid)
+                if member is None:
+                    try:
+                        member = await msg.guild.fetch_member(uid)
+                    except discord.HTTPException:
+                        member = None
+                _member_cache[uid] = member
+            cached_member = _member_cache.get(uid)
+            author_name = cached_member.display_name if cached_member is not None else msg.author.display_name
             all_submissions.append(
                 {
                     "id": str(msg.id),

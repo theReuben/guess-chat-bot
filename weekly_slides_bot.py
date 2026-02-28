@@ -545,11 +545,6 @@ async def generate_slides(client: discord.Client) -> None:
 
     if new_round:
         print(f"[info] New round detected (marker {marker_id}); creating fresh decks.")
-        # Clean up previous round's presentations
-        if named_pres_id:
-            delete_drive_file(drive_svc, named_pres_id)
-        if anon_pres_id:
-            delete_drive_file(drive_svc, anon_pres_id)
         named_pres_id = copy_presentation(drive_svc, f"Guess Chat — {topic} (Named)")
         anon_pres_id = copy_presentation(drive_svc, f"Guess Chat — {topic} (Anonymous)")
         share_presentation(drive_svc, named_pres_id)

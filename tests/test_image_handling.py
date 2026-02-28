@@ -19,6 +19,7 @@ from weekly_slides_bot import (
     _PT,
     _SLIDE_H_PT,
     _SLIDE_W_PT,
+    _body_resize_requests,
     _image_requests,
     generate_slides,
 )
@@ -248,3 +249,90 @@ class TestImageOnlySubmissionBody:
         submissions = first_call.kwargs.get("submissions") or first_call.args[4]
         assert submissions[0]["body"] == "My answer"
         assert submissions[0]["images"] == ["https://cdn.discord.com/img.png"]
+
+
+class TestBodyResizeRequests:
+    """_body_resize_requests must expand the body text box for text-only submissions."""
+
+    # Simulate a template-style slide with an author bar and a body text box.
+    # Author bar: y=0, height=55pt; body box: y=55pt, occupying the left 400pt.
+    _ELEMS = [
+        {
+            "objectId": "author_elem",
+            "shape": {"shapeType": "TEXT_BOX"},
+            "size": {
+                "width": {"magnitude": 720 * _PT},
+                "height": {"magnitude": _AUTHOR_BAR_PT * _PT},
+            },
+            "transform": {
+                "scaleX": 1,
+                "scaleY": 1,
+                "translateX": 0,
+                "translateY": 0,
+                "unit": "EMU",
+            },
+        },
+        {
+            "objectId": "body_elem",
+            "shape": {"shapeType": "TEXT_BOX"},
+            "size": {
+                "width": {"magnitude": 400 * _PT},
+                "height": {"magnitude": 314 * _PT},
+            },
+            "transform": {
+                "scaleX": 1,
+                "scaleY": 1,
+                "translateX": 0,
+                "translateY": _AUTHOR_BAR_PT * _PT,
+                "unit": "EMU",
+            },
+        },
+    ]
+
+    def test_returns_empty_when_has_images(self):
+        assert _body_resize_requests(self._ELEMS, has_images=True) == []
+
+    def test_returns_empty_for_no_elements(self):
+        assert _body_resize_requests([], has_images=False) == []
+
+    def test_returns_empty_when_no_elements_below_author_bar(self):
+        """No qualifying elements (all shapes are above the author bar)."""
+        only_author = [self._ELEMS[0]]  # only the author bar element (y=0)
+        assert _body_resize_requests(only_author, has_images=False) == []
+
+    def test_returns_single_request_for_text_only(self):
+        reqs = _body_resize_requests(self._ELEMS, has_images=False)
+        assert len(reqs) == 1
+
+    def test_request_targets_body_element(self):
+        req = _body_resize_requests(self._ELEMS, has_images=False)[0]
+        assert req["updatePageElementTransform"]["objectId"] == "body_elem"
+
+    def test_apply_mode_is_absolute(self):
+        req = _body_resize_requests(self._ELEMS, has_images=False)[0]
+        assert req["updatePageElementTransform"]["applyMode"] == "ABSOLUTE"
+
+    def test_body_element_positioned_at_content_area(self):
+        transform = _body_resize_requests(self._ELEMS, has_images=False)[0][
+            "updatePageElementTransform"
+        ]["transform"]
+        assert transform["translateX"] == _IMG_MARGIN_PT * _PT
+        assert transform["translateY"] == _AUTHOR_BAR_PT * _PT
+
+    def test_body_element_expanded_to_full_content_width(self):
+        transform = _body_resize_requests(self._ELEMS, has_images=False)[0][
+            "updatePageElementTransform"
+        ]["transform"]
+        elem_w = 400 * _PT  # original body width from _ELEMS
+        expected_scale_x = (_SLIDE_W_PT - 2 * _IMG_MARGIN_PT) * _PT / elem_w
+        assert transform["scaleX"] == pytest.approx(expected_scale_x)
+
+    def test_body_element_wider_than_original_template_area(self):
+        """Rendered width after resize must exceed the original left-half area."""
+        transform = _body_resize_requests(self._ELEMS, has_images=False)[0][
+            "updatePageElementTransform"
+        ]["transform"]
+        elem_w = 400 * _PT
+        rendered_w = elem_w * transform["scaleX"]
+        original_text_area_w = 400 * _PT  # typical left-half text area
+        assert rendered_w > original_text_area_w

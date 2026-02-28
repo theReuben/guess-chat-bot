@@ -157,6 +157,7 @@ _SLIDE_W_PT = 720    # standard 16:9 slide width in points
 _SLIDE_H_PT = 405    # standard 16:9 slide height in points
 _IMG_MARGIN_PT = 36  # slide edge margin used for image placement
 _AUTHOR_BAR_PT = 55  # height reserved for the author label at the top
+_BODY_Y_TOLERANCE_PT = 5  # tolerance when matching the body element Y position
 
 
 def _image_requests(slide_id: str, image_urls: list[str], has_text: bool = True) -> list[dict]:
@@ -216,6 +217,63 @@ def _image_requests(slide_id: str, image_urls: list[str], has_text: bool = True)
             }
         )
     return requests_list
+
+
+def _find_body_element(page_elements: list[dict]) -> dict | None:
+    """Return the body text box element (largest shape below the author bar)."""
+    candidates = [
+        elem for elem in page_elements
+        if elem.get("shape")
+        and elem.get("transform", {}).get("translateY", 0) / _PT >= _AUTHOR_BAR_PT - _BODY_Y_TOLERANCE_PT
+    ]
+    if not candidates:
+        return None
+    return max(
+        candidates,
+        key=lambda e: (
+            e.get("size", {}).get("width", {}).get("magnitude", 0)
+            * e.get("size", {}).get("height", {}).get("magnitude", 0)
+        ),
+    )
+
+
+def _body_resize_requests(page_elements: list[dict], has_images: bool) -> list[dict]:
+    """Return updatePageElementTransform requests to resize the body text box.
+
+    When *has_images* is False (text-only submission) the body text box is
+    expanded to fill the full available content area of the slide.  When
+    *has_images* is True the template layout is unchanged and an empty list is
+    returned.
+    """
+    if has_images:
+        return []
+    elem = _find_body_element(page_elements)
+    if elem is None:
+        return []
+
+    area_x = _IMG_MARGIN_PT * _PT
+    area_y = _AUTHOR_BAR_PT * _PT
+    area_w = (_SLIDE_W_PT - 2 * _IMG_MARGIN_PT) * _PT
+    area_h = (_SLIDE_H_PT - _AUTHOR_BAR_PT - _IMG_MARGIN_PT) * _PT
+
+    elem_w = elem["size"]["width"]["magnitude"]
+    elem_h = elem["size"]["height"]["magnitude"]
+
+    return [
+        {
+            "updatePageElementTransform": {
+                "objectId": elem["objectId"],
+                "transform": {
+                    "scaleX": area_w / elem_w,
+                    "scaleY": area_h / elem_h,
+                    "translateX": area_x,
+                    "translateY": area_y,
+                    "unit": "EMU",
+                },
+                "applyMode": "ABSOLUTE",
+            }
+        }
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -336,6 +394,19 @@ def build_deck(
             body={"requests": text_requests},
         ).execute()
 
+        # Resize body text box for text-only submissions
+        if not image_urls:
+            new_pres = slides_svc.presentations().get(presentationId=pres_id).execute()
+            new_slide = next(
+                s for s in new_pres["slides"] if s["objectId"] == new_slide_id
+            )
+            resize_reqs = _body_resize_requests(new_slide.get("pageElements", []), False)
+            if resize_reqs:
+                slides_svc.presentations().batchUpdate(
+                    presentationId=pres_id,
+                    body={"requests": resize_reqs},
+                ).execute()
+
         # Insert images
         if image_urls:
             drive_urls = [
@@ -441,10 +512,15 @@ def append_slides(
                 clear_requests.append(
                     {"deleteObject": {"objectId": elem["objectId"]}}
                 )
-        if clear_requests:
+        # Resize body text box for text-only submissions
+        resize_reqs = _body_resize_requests(
+            new_slide.get("pageElements", []), has_images=bool(image_urls)
+        )
+        all_clear_reqs = clear_requests + resize_reqs
+        if all_clear_reqs:
             slides_svc.presentations().batchUpdate(
                 presentationId=pres_id,
-                body={"requests": clear_requests},
+                body={"requests": all_clear_reqs},
             ).execute()
 
         # Set new text

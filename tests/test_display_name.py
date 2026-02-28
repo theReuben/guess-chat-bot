@@ -17,12 +17,12 @@ import discord
 from weekly_slides_bot import main
 
 
-class TestIntentsIncludeMembers:
-    """Ensure the bot requests the members intent for server nicknames."""
+class TestIntentsConfiguration:
+    """Ensure the bot requests only the required non-privileged intents."""
 
     @patch("weekly_slides_bot.OneShotClient")
-    def test_members_intent_enabled(self, mock_client_cls):
-        """main() must enable intents.members so server nicknames are available."""
+    def test_message_content_intent_enabled(self, mock_client_cls):
+        """main() must enable intents.message_content to read message text."""
         mock_instance = MagicMock()
         mock_client_cls.return_value = mock_instance
 
@@ -31,8 +31,8 @@ class TestIntentsIncludeMembers:
         # The first positional-or-keyword arg is 'intents='
         call_kwargs = mock_client_cls.call_args
         intents = call_kwargs.kwargs.get("intents") or call_kwargs.args[0]
-        assert intents.members is True, "intents.members must be True"
-        assert intents.message_content is True, "intents.message_content must remain True"
+        assert intents.message_content is True, "intents.message_content must be True"
+        assert intents.members is False, "intents.members must not be requested (privileged intent not enabled in portal)"
 
 
 class TestAuthorDisplayName:

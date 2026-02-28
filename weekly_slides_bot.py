@@ -615,7 +615,6 @@ class OneShotClient(discord.Client):
 def main() -> None:
     intents = discord.Intents.default()
     intents.message_content = True
-    intents.members = True
     client = OneShotClient(intents=intents)
     client.run(DISCORD_TOKEN)
 

@@ -93,6 +93,15 @@ def share_presentation(drive_svc, file_id: str) -> None:
     ).execute()
 
 
+def delete_drive_file(drive_svc, file_id: str) -> None:
+    """Delete a file from Google Drive. Silently ignores missing files."""
+    try:
+        drive_svc.files().delete(fileId=file_id).execute()
+        print(f"[info] Deleted old file {file_id} from Drive.")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[warn] Could not delete file {file_id}: {exc}")
+
+
 def presentation_url(pres_id: str) -> str:
     return f"https://docs.google.com/presentation/d/{pres_id}/edit?usp=sharing"
 

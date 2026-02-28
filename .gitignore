@@ -1,5 +1,7 @@
 # Secrets / credentials
 service_account.json
+oauth_client.json
+oauth_token.json
 .env
 
 # State

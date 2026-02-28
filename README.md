@@ -44,7 +44,7 @@ When someone posts a `GUESS CHAT <topic>` marker in the submissions channel, pla
 - **Python 3.10+**
 - A **Discord bot** with the Message Content intent enabled.
 - A **Google Cloud project** with the Slides API and Drive API enabled.
-- A **Google service account** with a JSON key file.
+- A **Google OAuth2 Desktop App** client ID and a refresh token for your personal Google account.
 
 ---
 
@@ -64,10 +64,10 @@ When someone posts a `GUESS CHAT <topic>` marker in the submissions channel, pla
 
 1. Go to the [Google Cloud Console](https://console.cloud.google.com/) and create or select a project.
 2. Enable the **Google Slides API** and **Google Drive API**.
-3. Go to **IAM & Admin → Service Accounts**, create a service account.
-4. Create a JSON key for the service account and download it as `service_account.json`.
-5. Create a folder in Google Drive to store the generated decks. Share it with the service account's email address (e.g. `bot@your-project.iam.gserviceaccount.com`) as **Editor**.
-6. Note the folder ID from the URL (`DRIVE_FOLDER_ID`).
+3. Go to **APIs & Services → OAuth consent screen**, configure it (External type), and add your Google account as a test user.
+4. Go to **APIs & Services → Credentials**, click **Create Credentials → OAuth client ID**, choose **Desktop app**, and download the JSON as `oauth_client.json`.
+5. Generate a refresh token by running an OAuth flow (e.g. using `google-auth-oauthlib`'s `InstalledAppFlow`) with the scopes `https://www.googleapis.com/auth/presentations` and `https://www.googleapis.com/auth/drive`. Save the resulting token JSON (containing `client_id`, `client_secret`, `refresh_token`, and `token_uri`) as `oauth_token.json`.
+6. Create a folder in Google Drive to store the generated decks. Note the folder ID from the URL (`DRIVE_FOLDER_ID`).
 
 ### Template Deck
 
@@ -75,7 +75,7 @@ When someone posts a `GUESS CHAT <topic>` marker in the submissions channel, pla
    - **Slide 1 (Title)**: add a text box containing `{{TOPIC}}` — this will be replaced with the round topic.
    - **Slide 2 (Submission template)**: add text boxes containing `{{AUTHOR}}` and `{{BODY}}` — these are replaced for each submission; this slide is duplicated once per submission.
    - **Slide 3 (End)**: a static closing slide — no modifications.
-2. Share the presentation with the service account email as **Editor**.
+2. Share the presentation with your Google account (the one used for OAuth) as **Editor** (it likely already has access as the owner).
 3. Copy the presentation ID from the URL (`TEMPLATE_DECK_ID`).
 
 ### GitHub Repository Setup
@@ -106,7 +106,7 @@ Add the following secrets to your repository (**Settings → Secrets and variabl
 | `DISCORD_RESULTS_CHANNEL_ID` | Results channel ID |
 | `DRIVE_FOLDER_ID` | Google Drive folder ID for generated decks |
 | `TEMPLATE_DECK_ID` | Google Slides template presentation ID |
-| `GOOGLE_SERVICE_ACCOUNT_JSON` | Full contents of the service account JSON key file |
+| `GOOGLE_OAUTH_TOKEN` | OAuth2 token JSON with `client_id`, `client_secret`, `refresh_token`, and `token_uri` |
 
 ---
 
@@ -219,9 +219,9 @@ Running on GitHub Actions free tier: **$0/month**. Each run takes under a minute
 |---|---|
 | Bot can't find the channel | Ensure Message Content Intent is enabled and the bot has been invited with `View Channels` + `Read Message History` permissions |
 | `KeyError: DISCORD_TOKEN` | Set the required environment variable or GitHub secret |
-| Google API 403 error | Make sure the service account has Editor access to both the template deck and the Drive folder |
+| Google API 403 error | Make sure your Google account has Editor access to both the template deck and the Drive folder, and that the OAuth token has the correct scopes |
 | Template slide not found | Ensure Slide 2 of the template contains the text `{{AUTHOR}}` in a text box |
-| Images not appearing | Discord CDN links expire; the bot re-uploads images to Drive — check the service account has Drive write access |
+| Images not appearing | Discord CDN links expire; the bot re-uploads images to Drive — check the OAuth token has Drive write access |
 | Double-run on DST change | The DST guard handles this; check the workflow logs for "skipping this scheduled run" |
 | State branch missing | It is created automatically on the first successful run |
 
@@ -229,8 +229,8 @@ Running on GitHub Actions free tier: **$0/month**. Each run takes under a minute
 
 ## Security Notes
 
-- `service_account.json` and `.env` are excluded by `.gitignore` and must never be committed.
-- The Google service account is granted minimal required permissions (Slides + Drive Editor on specific resources only).
+- `service_account.json`, `oauth_client.json`, `oauth_token.json`, and `.env` are excluded by `.gitignore` and must never be committed.
+- Google access uses OAuth2 with your personal account, granting only the scopes authorised during the OAuth consent flow.
 - Generated presentations are shared as "anyone with the link can view" — they are not indexed or searchable.
 - All secrets are stored as GitHub Actions secrets and never echoed in logs.
 

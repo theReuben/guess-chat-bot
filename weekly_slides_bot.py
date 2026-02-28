@@ -602,7 +602,11 @@ async def generate_slides(client: discord.Client) -> None:
         except discord.HTTPException as exc:
             print(f"[warn] fetch_channel({DISCORD_CHANNEL_ID}) failed: {exc}")
     if channel is None:
-        print(f"[error] Could not find channel {DISCORD_CHANNEL_ID}")
+        print(
+            f"[error] Could not find channel {DISCORD_CHANNEL_ID}. "
+            "Ensure the bot has been invited to the server and has the "
+            "View Channels and Read Message History permissions."
+        )
         return
 
     # --- Find the most recent GUESS CHAT marker ---
@@ -709,7 +713,11 @@ async def generate_slides(client: discord.Client) -> None:
         except discord.HTTPException as exc:
             print(f"[warn] fetch_channel({DISCORD_RESULTS_CHANNEL_ID}) failed: {exc}")
     if results_channel is None:
-        print(f"[error] Could not find results channel {DISCORD_RESULTS_CHANNEL_ID}")
+        print(
+            f"[error] Could not find results channel {DISCORD_RESULTS_CHANNEL_ID}. "
+            "Ensure the bot has been invited to the server and has the "
+            "View Channels and Send Messages permissions."
+        )
     else:
         named_url = presentation_url(named_pres_id)
         anon_url = presentation_url(anon_pres_id)
@@ -737,6 +745,15 @@ async def generate_slides(client: discord.Client) -> None:
 class OneShotClient(discord.Client):
     async def on_ready(self) -> None:
         print(f"[info] Logged in as {self.user}")
+        if self.guilds:
+            guild_names = ", ".join(g.name for g in self.guilds)
+            print(f"[info] Connected to {len(self.guilds)} guild(s): {guild_names}")
+        else:
+            print(
+                "[error] Bot is not in any guilds. "
+                "Invite the bot using the OAuth2 URL from the Discord Developer Portal "
+                "(scopes: bot; permissions: View Channels, Read Message History, Send Messages)."
+            )
         try:
             await generate_slides(self)
         finally:

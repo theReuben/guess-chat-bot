@@ -455,21 +455,8 @@ def format_results_message(
     named_url: str,
     anon_url: str,
 ) -> str:
-    submitter_counts: dict[str, int] = {}
-    for sub in submissions:
-        submitter_counts[sub["author"]] = submitter_counts.get(sub["author"], 0) + 1
-
-    sorted_names = sorted(submitter_counts.keys(), key=str.lower)
-    name_lines = []
-    for name in sorted_names:
-        count = submitter_counts[name]
-        if count > 1:
-            name_lines.append(f"  • {name} (×{count})")
-        else:
-            name_lines.append(f"  • {name}")
-
-    total = len(submissions)
-    unique = len(submitter_counts)
+    sorted_names = sorted({sub["author"] for sub in submissions}, key=str.lower)
+    name_lines = [f"  • {name}" for name in sorted_names]
 
     lines = [
         f"## Guess Chat — {topic}",
@@ -477,7 +464,7 @@ def format_results_message(
         f"**Questions (anonymous):** {anon_url}",
         f"**Answers:** ||{named_url}||",
         "",
-        f"**Submissions ({total} total, {unique} unique submitters):**",
+        f"**Submissions ({len(submissions)}):**",
     ]
     lines.extend(name_lines)
     return "\n".join(lines)
@@ -517,12 +504,12 @@ async def generate_slides(client: discord.Client) -> None:
     all_submissions: list[dict] = []
     async for msg in channel.history(limit=1000, after=marker_msg):
         if msg.content.upper().startswith(SUBMISSION_PREFIX):
-            body = msg.content[len(SUBMISSION_PREFIX):].strip()
+            body = msg.content[len(SUBMISSION_PREFIX):].strip() or "(image submission)"
             images = [a.url for a in msg.attachments if a.content_type and a.content_type.startswith("image/")]
             all_submissions.append(
                 {
                     "id": str(msg.id),
-                    "author": msg.author.display_name,
+                    "author": msg.author.nick or msg.author.display_name,
                     "body": body,
                     "images": images,
                 }
@@ -531,6 +518,12 @@ async def generate_slides(client: discord.Client) -> None:
     if not all_submissions:
         print("[info] No SUBMISSION messages found after the marker.")
         return
+
+    # Keep only the latest submission per author
+    seen_authors: dict[str, int] = {}
+    for i, sub in enumerate(all_submissions):
+        seen_authors[sub["author"]] = i
+    all_submissions = [all_submissions[i] for i in sorted(seen_authors.values())]
 
     slides_svc, drive_svc = get_google_services()
 

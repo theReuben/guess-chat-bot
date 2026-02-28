@@ -54,11 +54,16 @@ When someone posts a `GUESS CHAT <topic>` marker in the submissions channel, pla
 
 1. Go to the [Discord Developer Portal](https://discord.com/developers/applications) and create a new application.
 2. Navigate to **Bot**, enable **Message Content Intent** under *Privileged Gateway Intents*.
-3. Under **OAuth2 → URL Generator**, select scopes: `bot` only.
-4. Select permissions: `View Channels`, `Read Message History`, `Send Messages`.
-5. Use the generated URL to invite the bot to your server.
-6. Copy the bot token — this is your `DISCORD_TOKEN`.
+3. Under **OAuth2 → URL Generator**:
+   - Select scopes: `bot`.
+   - Select bot permissions: `View Channels`, `Read Message History`, `Send Messages`.
+   - Copy the generated invite URL.
+4. **Invite the bot to your server**: open the invite URL in a browser, select the target server from the dropdown, and click **Authorize**. You must have the *Manage Server* permission on that server.
+5. **Verify the bot appears** in the server member list (right-hand sidebar in Discord). If it doesn't appear, see [Troubleshooting](#troubleshooting) below.
+6. Copy the bot token from the **Bot** page — this is your `DISCORD_TOKEN`.
 7. Enable **Developer Mode** in Discord (User Settings → Advanced), then right-click the submissions channel and results channel to copy their IDs (`DISCORD_CHANNEL_ID` and `DISCORD_RESULTS_CHANNEL_ID`).
+
+> **Moving to a different server?** The invite URL is tied to the permissions you selected. Generate a **new invite URL** and open it to add the bot to the new server — the bot must be invited separately to each server it needs to access.
 
 ### Google Cloud
 
@@ -217,7 +222,9 @@ Running on GitHub Actions free tier: **$0/month**. Each run takes under a minute
 
 | Problem | Solution |
 |---|---|
-| Bot can't find the channel | Ensure Message Content Intent is enabled and the bot has been invited with `View Channels` + `Read Message History` permissions |
+| Bot not visible in the server member list | The bot has not been invited to this server. Generate a new invite URL from **OAuth2 → URL Generator** (scopes: `bot`; permissions: `View Channels`, `Read Message History`, `Send Messages`), open it in a browser, and select the correct server. You need the *Manage Server* permission to add it. |
+| `Could not find channel` / bot logs in but can't see channels | **1)** Check the bot is in the correct server (see above). **2)** Verify `DISCORD_CHANNEL_ID` and `DISCORD_RESULTS_CHANNEL_ID` are from the same server the bot was invited to. **3)** Ensure the bot's role has `View Channels` and `Read Message History` permissions for those channels. |
+| Bot was working in a test server but not in the real one | Each server requires a separate invitation. Generate a new invite URL and add the bot to the new server. Update channel IDs to match the new server's channels. |
 | `KeyError: DISCORD_TOKEN` | Set the required environment variable or GitHub secret |
 | Google API 403 error | Make sure your Google account has Editor access to both the template deck and the Drive folder, and that the OAuth token has the correct scopes |
 | Template slide not found | Ensure Slide 2 of the template contains the text `{{AUTHOR}}` in a text box |

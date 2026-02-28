@@ -515,10 +515,13 @@ async def generate_slides(client: discord.Client) -> None:
         if msg.content.upper().startswith(SUBMISSION_PREFIX):
             body = msg.content[len(SUBMISSION_PREFIX):].strip() or "(image submission)"
             images = [a.url for a in msg.attachments if a.content_type and a.content_type.startswith("image/")]
+            # Prefer the guild-cached member to reliably get the server nickname
+            member = channel.guild.get_member(msg.author.id)
+            author_name = member.display_name if member else msg.author.display_name
             all_submissions.append(
                 {
                     "id": str(msg.id),
-                    "author": msg.author.display_name,
+                    "author": author_name,
                     "body": body,
                     "images": images,
                 }
@@ -612,6 +615,7 @@ class OneShotClient(discord.Client):
 def main() -> None:
     intents = discord.Intents.default()
     intents.message_content = True
+    intents.members = True
     client = OneShotClient(intents=intents)
     client.run(DISCORD_TOKEN)
 

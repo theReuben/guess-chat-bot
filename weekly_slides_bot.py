@@ -151,18 +151,49 @@ def upload_image_to_drive(drive_svc, url: str, cache: dict[str, str]) -> str | N
 # Image grid layout
 # ---------------------------------------------------------------------------
 
-# 2×2 grid on the right half of a slide (positions in EMU: 1pt = 12700 EMU)
-_PT = 12700  # EMU per point
+# Image layout constants (all in points; multiply by _PT to get EMU)
+_PT = 12700          # EMU per point
+_SLIDE_W_PT = 720    # standard 16:9 slide width in points
+_SLIDE_H_PT = 405    # standard 16:9 slide height in points
+_IMG_MARGIN_PT = 36  # slide edge margin used for image placement
+_AUTHOR_BAR_PT = 55  # height reserved for the author label at the top
 
 
-def _image_requests(slide_id: str, image_urls: list[str]) -> list[dict]:
-    """Return createImage requests for up to 4 images in a 2×2 grid."""
+def _image_requests(slide_id: str, image_urls: list[str], has_text: bool = True) -> list[dict]:
+    """Return createImage requests for up to 4 images in a 1–2 column grid.
+
+    When *has_text* is True the images are placed in the right portion of the
+    slide to leave room for the body text on the left.  When *has_text* is
+    False (image-only submission) the images fill the full available slide area.
+    """
+    urls = image_urls[:4]
+    if not urls:
+        return []
+
+    n_cols = min(len(urls), 2)
+    n_rows = (len(urls) + n_cols - 1) // n_cols
+    gap = 8  # points between images
+
+    if has_text:
+        area_x = 400
+        area_y = _AUTHOR_BAR_PT
+        area_w = _SLIDE_W_PT - area_x - _IMG_MARGIN_PT   # ≈ 284 pt
+        area_h = _SLIDE_H_PT - area_y - _IMG_MARGIN_PT   # ≈ 314 pt
+    else:
+        area_x = _IMG_MARGIN_PT
+        area_y = _AUTHOR_BAR_PT
+        area_w = _SLIDE_W_PT - 2 * _IMG_MARGIN_PT        # ≈ 648 pt
+        area_h = _SLIDE_H_PT - area_y - _IMG_MARGIN_PT   # ≈ 314 pt
+
+    img_w = (area_w - gap * (n_cols - 1)) // n_cols
+    img_h = (area_h - gap * (n_rows - 1)) // n_rows
+
     requests_list = []
-    for idx, img_url in enumerate(image_urls[:4]):
-        col = idx % 2
-        row = idx // 2
-        left_pt = 400 + col * 170
-        top_pt = 60 + row * 195
+    for idx, img_url in enumerate(urls):
+        col = idx % n_cols
+        row = idx // n_cols
+        left = area_x + col * (img_w + gap)
+        top = area_y + row * (img_h + gap)
         requests_list.append(
             {
                 "createImage": {
@@ -170,14 +201,14 @@ def _image_requests(slide_id: str, image_urls: list[str]) -> list[dict]:
                     "elementProperties": {
                         "pageObjectId": slide_id,
                         "size": {
-                            "width": {"magnitude": 160 * _PT, "unit": "EMU"},
-                            "height": {"magnitude": 185 * _PT, "unit": "EMU"},
+                            "width": {"magnitude": img_w * _PT, "unit": "EMU"},
+                            "height": {"magnitude": img_h * _PT, "unit": "EMU"},
                         },
                         "transform": {
                             "scaleX": 1,
                             "scaleY": 1,
-                            "translateX": left_pt * _PT,
-                            "translateY": top_pt * _PT,
+                            "translateX": left * _PT,
+                            "translateY": top * _PT,
                             "unit": "EMU",
                         },
                     },
@@ -315,7 +346,7 @@ def build_deck(
             if drive_urls:
                 slides_svc.presentations().batchUpdate(
                     presentationId=pres_id,
-                    body={"requests": _image_requests(new_slide_id, drive_urls)},
+                    body={"requests": _image_requests(new_slide_id, drive_urls, has_text=bool(body_text))},
                 ).execute()
 
     # Delete the original template slide
@@ -449,7 +480,7 @@ def append_slides(
             if drive_urls:
                 slides_svc.presentations().batchUpdate(
                     presentationId=pres_id,
-                    body={"requests": _image_requests(new_slide_id, drive_urls)},
+                    body={"requests": _image_requests(new_slide_id, drive_urls, has_text=bool(body_text))},
                 ).execute()
 
 
@@ -514,7 +545,7 @@ async def generate_slides(client: discord.Client) -> None:
     _member_cache: dict[int, discord.Member | None] = {}
     async for msg in channel.history(limit=1000, after=marker_msg):
         if msg.content.upper().startswith(SUBMISSION_PREFIX):
-            body = msg.content[len(SUBMISSION_PREFIX):].strip() or "(image submission)"
+            body = msg.content[len(SUBMISSION_PREFIX):].strip()
             images = [a.url for a in msg.attachments if a.content_type and a.content_type.startswith("image/")]
             # Resolve the guild Member to get the server-specific display name (nickname).
             # channel.history() uses the REST API which does not reliably include partial

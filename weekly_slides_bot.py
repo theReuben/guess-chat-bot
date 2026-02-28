@@ -509,7 +509,7 @@ async def generate_slides(client: discord.Client) -> None:
             all_submissions.append(
                 {
                     "id": str(msg.id),
-                    "author": msg.author.nick or msg.author.display_name,
+                    "author": getattr(msg.author, "nick", None) or msg.author.display_name,
                     "body": body,
                     "images": images,
                 }

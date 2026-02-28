@@ -93,7 +93,7 @@ class TestChannelNotFoundErrorMessages:
     @patch("weekly_slides_bot.copy_presentation", return_value="pres_id")
     @patch("weekly_slides_bot.get_google_services", return_value=(MagicMock(), MagicMock()))
     @patch("weekly_slides_bot.load_state", return_value={})
-    async def test_results_channel_error_suggests_invite(
+    async def test_results_channel_not_found_error_suggests_invite(
         self, _load, _gcs, _copy, _share, _build, _save, capsys
     ):
         """Error for missing results channel should mention invitation and permissions."""

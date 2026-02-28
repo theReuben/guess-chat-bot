@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -14,7 +14,7 @@ os.environ.setdefault("DISCORD_RESULTS_CHANNEL_ID", "2")
 os.environ.setdefault("TEMPLATE_DECK_ID", "tpl")
 
 import discord
-from weekly_slides_bot import main
+from weekly_slides_bot import generate_slides, main
 
 
 class TestIntentsConfiguration:
@@ -38,22 +38,67 @@ class TestIntentsConfiguration:
 class TestAuthorDisplayName:
     """Ensure the submission loop uses msg.author.display_name directly."""
 
+    def _make_client(self, marker_msg, sub_msg):
+        """Build a minimal mock Discord client with two-pass channel.history()."""
+        call_count = 0
+
+        async def history_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # First call: scan for the GUESS CHAT marker
+                yield marker_msg
+            else:
+                # Second call: collect SUBMISSION messages after the marker
+                yield sub_msg
+
+        mock_channel = MagicMock()
+        mock_channel.history = history_side_effect
+
+        mock_results_channel = MagicMock()
+        mock_results_channel.send = AsyncMock()
+
+        mock_client = MagicMock()
+        mock_client.get_channel.side_effect = lambda cid: (
+            mock_channel if cid == 1 else mock_results_channel
+        )
+        return mock_client
+
     @pytest.mark.asyncio
-    async def test_uses_msg_author_display_name(self):
-        """msg.author in a guild channel is already a Member; use its display_name directly."""
-        # msg.author is a discord.Member with the server nickname as display_name
-        author = MagicMock()
-        author.display_name = "ServerNick"
+    @patch("weekly_slides_bot.save_state")
+    @patch("weekly_slides_bot.build_deck")
+    @patch("weekly_slides_bot.share_presentation")
+    @patch("weekly_slides_bot.copy_presentation", return_value="pres_id")
+    @patch("weekly_slides_bot.get_google_services", return_value=(MagicMock(), MagicMock()))
+    @patch("weekly_slides_bot.load_state", return_value={})
+    async def test_generate_slides_uses_display_name(
+        self, _load, _gcs, _copy, _share, mock_build, _save
+    ):
+        """generate_slides() must record author names from msg.author.display_name."""
+        marker_msg = MagicMock()
+        marker_msg.id = 100
+        marker_msg.content = "GUESS CHAT Test Topic"
 
-        # Resolve author name the same way the bot does
-        author_name = author.display_name
-        assert author_name == "ServerNick"
+        sub_msg = MagicMock()
+        sub_msg.id = 200
+        sub_msg.content = "SUBMISSION My answer"
+        sub_msg.attachments = []
+        sub_msg.author = MagicMock()
+        sub_msg.author.display_name = "ServerNickname"
+        sub_msg.author.name = "account_username"  # different to confirm display_name is used
 
-    @pytest.mark.asyncio
-    async def test_uses_display_name_as_server_nick(self):
-        """display_name reflects the server nickname when set."""
-        author = MagicMock()
-        author.display_name = "MyServerNickname"
+        mock_client = self._make_client(marker_msg, sub_msg)
 
-        author_name = author.display_name
-        assert author_name == "MyServerNickname"
+        await generate_slides(mock_client)
+
+        assert mock_build.called, "build_deck should have been called"
+        # Retrieve submissions by keyword name to avoid positional fragility
+        first_call = mock_build.call_args_list[0]
+        submissions = first_call.kwargs.get("submissions") or first_call.args[4]
+        assert len(submissions) == 1
+        assert submissions[0]["author"] == "ServerNickname", (
+            "author should be the server nickname from display_name"
+        )
+        assert submissions[0]["author"] != "account_username", (
+            "author must not fall back to the account-level username"
+        )

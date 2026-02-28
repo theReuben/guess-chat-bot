@@ -152,7 +152,9 @@ def upload_image_to_drive(drive_svc, url: str, cache: dict[str, str]) -> str | N
 # ---------------------------------------------------------------------------
 
 # 2×2 grid on the right half of a slide (positions in EMU: 1pt = 12700 EMU)
-_PT = 12700  # EMU per point
+_PT = 12700          # EMU per point
+_SLIDE_WIDTH_EMU = 9144000  # 720pt - standard 16:9 slide width
+_MARGIN_EMU = 457200        # ~36pt side margin
 
 
 def _image_requests(slide_id: str, image_urls: list[str]) -> list[dict]:
@@ -185,6 +187,74 @@ def _image_requests(slide_id: str, image_urls: list[str]) -> list[dict]:
             }
         )
     return requests_list
+
+
+def _body_fill_requests(slide: dict, has_images: bool) -> list[dict]:
+    """Return requests to make the {{BODY}} text box fill the available space.
+
+    Always applies TEXT_AUTOFIT so the font scales to fit within the shape.
+    When there are no images the shape is also widened to span the full slide
+    width (minus margins) so short text is displayed at a comfortable size.
+    """
+    body_id: str | None = None
+    body_elem: dict | None = None
+    for elem in slide.get("pageElements", []):
+        shape = elem.get("shape", {})
+        for tb in shape.get("text", {}).get("textElements", []):
+            if "{{BODY}}" in tb.get("textRun", {}).get("content", ""):
+                body_id = elem["objectId"]
+                body_elem = elem
+                break
+        if body_id:
+            break
+
+    if body_id is None:
+        return []
+
+    reqs: list[dict] = [
+        {
+            "updateShapeProperties": {
+                "objectId": body_id,
+                "shapeProperties": {
+                    "autofit": {"autofitType": "TEXT_AUTOFIT"}
+                },
+                "fields": "autofit",
+            }
+        }
+    ]
+
+    if not has_images and body_elem is not None:
+        current_transform = body_elem.get("transform", {})
+        current_size = body_elem.get("size", {})
+        reqs += [
+            {
+                "updatePageElementTransform": {
+                    "objectId": body_id,
+                    "transform": {
+                        **current_transform,
+                        "translateX": _MARGIN_EMU,
+                        "unit": "EMU",
+                    },
+                    "applyMode": "ABSOLUTE",
+                }
+            },
+            {
+                "updatePageElementSize": {
+                    "objectId": body_id,
+                    "size": {
+                        "width": {
+                            "magnitude": _SLIDE_WIDTH_EMU - 2 * _MARGIN_EMU,
+                            "unit": "EMU",
+                        },
+                        "height": current_size.get(
+                            "height", {"magnitude": 0, "unit": "EMU"}
+                        ),
+                    },
+                }
+            },
+        ]
+
+    return reqs
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +352,14 @@ def build_deck(
             },
         ).execute()
 
-        # Replace placeholders on the new slide
+        # Fetch the duplicated slide to determine body-shape layout requests
+        dup_pres = slides_svc.presentations().get(presentationId=pres_id).execute()
+        dup_slide = next(
+            s for s in dup_pres["slides"] if s["objectId"] == new_slide_id
+        )
+        layout_reqs = _body_fill_requests(dup_slide, len(image_urls) > 0)
+
+        # Replace placeholders on the new slide and apply layout adjustments
         author_text = f"Answer: {author}" if named else "Answer:"
         text_requests = [
             {
@@ -299,7 +376,7 @@ def build_deck(
                     "pageObjectIds": [new_slide_id],
                 }
             },
-        ]
+        ] + layout_reqs
         slides_svc.presentations().batchUpdate(
             presentationId=pres_id,
             body={"requests": text_requests},

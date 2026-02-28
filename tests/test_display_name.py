@@ -36,44 +36,24 @@ class TestIntentsConfiguration:
 
 
 class TestAuthorDisplayName:
-    """Ensure the submission loop prefers the guild-cached member display name."""
+    """Ensure the submission loop uses msg.author.display_name directly."""
 
     @pytest.mark.asyncio
-    async def test_uses_guild_member_display_name(self):
-        """When guild.get_member() returns a member, use its display_name."""
-        # Simulate a Member returned by guild.get_member() with a server nick
-        guild_member = MagicMock()
-        guild_member.display_name = "ServerNick"
-
-        guild = MagicMock()
-        guild.get_member.return_value = guild_member
-
-        # msg.author is a User-like object with only global display name
+    async def test_uses_msg_author_display_name(self):
+        """msg.author in a guild channel is already a Member; use its display_name directly."""
+        # msg.author is a discord.Member with the server nickname as display_name
         author = MagicMock()
-        author.id = 12345
-        author.display_name = "GlobalName"
-
-        channel = MagicMock()
-        channel.guild = guild
+        author.display_name = "ServerNick"
 
         # Resolve author name the same way the bot does
-        member = channel.guild.get_member(author.id)
-        author_name = member.display_name if member else author.display_name
+        author_name = author.display_name
         assert author_name == "ServerNick"
 
     @pytest.mark.asyncio
-    async def test_falls_back_to_msg_author_when_member_not_cached(self):
-        """When guild.get_member() returns None, fall back to msg.author."""
-        guild = MagicMock()
-        guild.get_member.return_value = None
-
+    async def test_uses_display_name_as_server_nick(self):
+        """display_name reflects the server nickname when set."""
         author = MagicMock()
-        author.id = 12345
-        author.display_name = "GlobalName"
+        author.display_name = "MyServerNickname"
 
-        channel = MagicMock()
-        channel.guild = guild
-
-        member = channel.guild.get_member(author.id)
-        author_name = member.display_name if member else author.display_name
-        assert author_name == "GlobalName"
+        author_name = author.display_name
+        assert author_name == "MyServerNickname"

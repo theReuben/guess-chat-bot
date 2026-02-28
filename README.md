@@ -12,7 +12,7 @@ When someone posts a `GUESS CHAT <topic>` marker in the submissions channel, pla
 2. Copies a Google Slides template twice — one **named** deck (answers revealed) and one **anonymous** deck (for guessing).
 3. Fills each deck with one slide per submission, inserting the player's answer and any images.
 4. Shares both decks publicly ("anyone with the link can view").
-5. Posts a summary message in the results channel with the anonymous link and the named link hidden in Discord spoiler tags.
+5. Posts a summary message in the results channel with the anonymous link and the named link.
 
 ---
 
@@ -35,7 +35,7 @@ When someone posts a `GUESS CHAT <topic>` marker in the submissions channel, pla
 3. The bot runs (scheduled or manual) and generates the two decks.
 4. The results channel receives a message with:
    - A link to the **anonymous** deck (everyone can guess).
-   - A link to the **named** deck hidden in spoiler tags (reveal after guessing).
+   - A link to the **named** deck (answers revealed).
 
 ---
 
@@ -185,7 +185,7 @@ To reset state manually, delete or empty `state.json` on the `state` branch, or 
 ## Guess Chat — DnD Characters
 
 **Questions (anonymous):** https://docs.google.com/presentation/d/.../edit?usp=sharing
-**Answers:** ||https://docs.google.com/presentation/d/.../edit?usp=sharing||
+**Answers:** https://docs.google.com/presentation/d/.../edit?usp=sharing
 
 **Submissions (5 total, 4 unique submitters):**
   • Alice

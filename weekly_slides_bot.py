@@ -471,7 +471,7 @@ def format_results_message(
         f"## Guess Chat — {topic}",
         "",
         f"**Questions (anonymous):** {anon_url}",
-        f"**Answers:** ||{named_url}||",
+        f"**Answers:** {named_url}",
         "",
         f"**Submissions ({len(submissions)}):**",
     ]
@@ -515,9 +515,8 @@ async def generate_slides(client: discord.Client) -> None:
         if msg.content.upper().startswith(SUBMISSION_PREFIX):
             body = msg.content[len(SUBMISSION_PREFIX):].strip() or "(image submission)"
             images = [a.url for a in msg.attachments if a.content_type and a.content_type.startswith("image/")]
-            # Prefer the guild-cached member to reliably get the server nickname
-            member = channel.guild.get_member(msg.author.id)
-            author_name = member.display_name if member else msg.author.display_name
+            # msg.author in a guild channel is already a Member with the correct server nickname
+            author_name = msg.author.display_name
             all_submissions.append(
                 {
                     "id": str(msg.id),

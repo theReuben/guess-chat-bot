@@ -11,6 +11,7 @@ One-shot Discord bot that:
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import os
@@ -636,6 +637,8 @@ async def generate_slides(client: discord.Client) -> None:
                         member = await msg.guild.fetch_member(uid)
                     except discord.HTTPException:
                         member = None
+                    # Yield control and pace API calls to avoid rate-limits
+                    await asyncio.sleep(0.25)
                 _member_cache[uid] = member
             cached_member = _member_cache.get(uid)
             author_name = cached_member.display_name if cached_member is not None else msg.author.display_name

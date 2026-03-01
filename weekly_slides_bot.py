@@ -615,10 +615,11 @@ def build_deck(
                         )
                     )
                 except Exception as exc:  # noqa: BLE001
-                    print(f"[warn] Could not insert images for '{author}': {exc}")
+                    exc_detail = str(exc) or repr(exc)
+                    print(f"[warn] Could not insert images for '{author}': {exc_detail}")
                     errors.append({
                         "author": author,
-                        "issue": f"Could not insert image(s) into slide: {exc}",
+                        "issue": f"Could not insert image(s) into slide: {exc_detail}",
                         **err_meta,
                     })
 
@@ -632,7 +633,7 @@ def build_deck(
                     )
                 )
             except Exception as exc:  # noqa: BLE001
-                print(f"[warn] Could not embed YouTube video for '{author}': {exc}")
+                print(f"[warn] Could not embed YouTube video for '{author}': {str(exc) or repr(exc)}")
 
     # Delete the original template slide
     execute_with_retry(
@@ -809,10 +810,11 @@ def append_slides(
                         )
                     )
                 except Exception as exc:  # noqa: BLE001
-                    print(f"[warn] Could not insert images for '{author}': {exc}")
+                    exc_detail = str(exc) or repr(exc)
+                    print(f"[warn] Could not insert images for '{author}': {exc_detail}")
                     errors.append({
                         "author": author,
-                        "issue": f"Could not insert image(s) into slide: {exc}",
+                        "issue": f"Could not insert image(s) into slide: {exc_detail}",
                         **err_meta,
                     })
 
@@ -826,7 +828,7 @@ def append_slides(
                     )
                 )
             except Exception as exc:  # noqa: BLE001
-                print(f"[warn] Could not embed YouTube video for '{author}': {exc}")
+                print(f"[warn] Could not embed YouTube video for '{author}': {str(exc) or repr(exc)}")
 
     return errors
 

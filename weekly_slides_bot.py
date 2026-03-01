@@ -202,7 +202,7 @@ def upload_image_to_drive(drive_svc, url: str, cache: dict[str, str]) -> str | N
         )
     )
 
-    public_url = f"https://drive.google.com/uc?id={file_id}&export=download"
+    public_url = f"https://lh3.googleusercontent.com/d/{file_id}"
     cache[url] = public_url
     return public_url
 
@@ -277,6 +277,58 @@ def _image_requests(slide_id: str, image_urls: list[str], has_text: bool = True)
             }
         )
     return requests_list
+
+
+def _insert_images(
+    slides_svc,
+    pres_id: str,
+    slide_id: str,
+    drive_urls: list[str],
+    has_text: bool,
+    author: str,
+) -> list[str]:
+    """Insert images into a slide, falling back to per-image insertion on failure.
+
+    Returns a list of error description strings (empty if all images inserted
+    successfully).
+    """
+    reqs = _image_requests(slide_id, drive_urls, has_text=has_text)
+    if not reqs:
+        return []
+
+    # Try inserting all images in a single batch first.
+    try:
+        execute_with_retry(
+            slides_svc.presentations().batchUpdate(
+                presentationId=pres_id,
+                body={"requests": reqs},
+            )
+        )
+        return []
+    except Exception as exc:  # noqa: BLE001
+        batch_detail = str(exc) or repr(exc)
+        print(
+            f"[warn] Batch image insert failed for '{author}': {batch_detail}; "
+            "retrying images individually"
+        )
+
+    # Fall back to inserting each image individually so one bad image
+    # does not prevent the others from being placed on the slide.
+    error_details: list[str] = []
+    for req, url in zip(reqs, drive_urls):
+        try:
+            execute_with_retry(
+                slides_svc.presentations().batchUpdate(
+                    presentationId=pres_id,
+                    body={"requests": [req]},
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            detail = str(exc) or repr(exc)
+            print(f"[warn] Could not insert image for '{author}' ({url}): {detail}")
+            error_details.append(detail)
+
+    return error_details
 
 
 def _find_body_element(page_elements: list[dict]) -> dict | None:
@@ -607,19 +659,14 @@ def build_deck(
                 })
             drive_urls = [u for u in drive_urls_raw if u]
             if drive_urls:
-                try:
-                    execute_with_retry(
-                        slides_svc.presentations().batchUpdate(
-                            presentationId=pres_id,
-                            body={"requests": _image_requests(new_slide_id, drive_urls, has_text=bool(body_text))},
-                        )
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    exc_detail = str(exc) or repr(exc)
-                    print(f"[warn] Could not insert images for '{author}': {exc_detail}")
+                img_errors = _insert_images(
+                    slides_svc, pres_id, new_slide_id, drive_urls,
+                    has_text=bool(body_text), author=author,
+                )
+                for detail in img_errors:
                     errors.append({
                         "author": author,
-                        "issue": f"Could not insert image(s) into slide: {exc_detail}",
+                        "issue": f"Could not insert image(s) into slide: {detail}",
                         **err_meta,
                     })
 
@@ -802,19 +849,14 @@ def append_slides(
                 })
             drive_urls = [u for u in drive_urls_raw if u]
             if drive_urls:
-                try:
-                    execute_with_retry(
-                        slides_svc.presentations().batchUpdate(
-                            presentationId=pres_id,
-                            body={"requests": _image_requests(new_slide_id, drive_urls, has_text=bool(body_text))},
-                        )
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    exc_detail = str(exc) or repr(exc)
-                    print(f"[warn] Could not insert images for '{author}': {exc_detail}")
+                img_errors = _insert_images(
+                    slides_svc, pres_id, new_slide_id, drive_urls,
+                    has_text=bool(body_text), author=author,
+                )
+                for detail in img_errors:
                     errors.append({
                         "author": author,
-                        "issue": f"Could not insert image(s) into slide: {exc_detail}",
+                        "issue": f"Could not insert image(s) into slide: {detail}",
                         **err_meta,
                     })
 

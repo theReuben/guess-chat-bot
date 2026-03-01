@@ -43,6 +43,13 @@ TEMPLATE_DECK_ID = os.environ["TEMPLATE_DECK_ID"]
 MARKER_PREFIX = "GUESS CHAT"
 SUBMISSION_PREFIX = "SUBMISSION"
 
+# Regexes that tolerate leading markdown formatting (headings, bold, italic).
+# Examples matched by _MARKER_LINE_RE: "GUESS CHAT Topic", "# GUESS CHAT Topic"
+# Examples matched by _SUBMISSION_RE: "SUBMISSION answer", "**SUBMISSION** answer"
+_MD_PREFIX_RE = re.compile(r"^[#*_ \t]+")
+_MARKER_LINE_RE = re.compile(r"^[#*_ \t]*(GUESS\s+CHAT)\b\s*(.*)", re.IGNORECASE)
+_SUBMISSION_RE = re.compile(r"^[#*_ \t]*(SUBMISSION)\b[*_]*\s*(.*)", re.IGNORECASE | re.DOTALL)
+
 # ---------------------------------------------------------------------------
 # State helpers
 # ---------------------------------------------------------------------------
@@ -646,7 +653,8 @@ async def generate_slides(client: discord.Client) -> None:
     # --- Find the most recent GUESS CHAT marker ---
     marker_msg = None
     async for msg in channel.history(limit=500):
-        if msg.content.upper().startswith(MARKER_PREFIX):
+        first_line = msg.content.split("\n", 1)[0]
+        if _MARKER_LINE_RE.match(first_line):
             marker_msg = msg
             break
 
@@ -655,16 +663,27 @@ async def generate_slides(client: discord.Client) -> None:
         return
 
     marker_id = str(marker_msg.id)
-    # Extract topic: everything after "GUESS CHAT " (case-insensitive)
-    topic_match = re.match(rf"{MARKER_PREFIX}\s+(.*)", marker_msg.content, re.IGNORECASE)
-    topic = topic_match.group(1).strip() if topic_match else "Unknown"
+    # Extract topic: everything after "GUESS CHAT" on the first line,
+    # or the first non-empty line after it (handles "# GUESS CHAT\n# TOPIC").
+    first_line = marker_msg.content.split("\n", 1)[0]
+    marker_match = _MARKER_LINE_RE.match(first_line)
+    topic = marker_match.group(2).strip() if marker_match and marker_match.group(2).strip() else ""
+    if not topic:
+        for line in marker_msg.content.split("\n")[1:]:
+            candidate = _MD_PREFIX_RE.sub("", line).strip()
+            if candidate:
+                topic = candidate
+                break
+    if not topic:
+        topic = "Unknown"
 
     # --- Collect SUBMISSION messages after the marker ---
     all_submissions: list[dict] = []
     _member_cache: dict[int, discord.Member | None] = {}
     async for msg in channel.history(limit=1000, after=marker_msg):
-        if msg.content.upper().startswith(SUBMISSION_PREFIX):
-            body = msg.content[len(SUBMISSION_PREFIX):].strip()
+        sub_match = _SUBMISSION_RE.match(msg.content)
+        if sub_match:
+            body = sub_match.group(2).strip()
             images = [a.url for a in msg.attachments if a.content_type and a.content_type.startswith("image/")]
             # Resolve the guild Member to get the server-specific display name (nickname).
             # channel.history() uses the REST API which does not reliably include partial

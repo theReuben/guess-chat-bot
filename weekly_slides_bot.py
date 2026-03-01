@@ -35,10 +35,14 @@ from googleapiclient.http import MediaIoBaseUpload
 DISCORD_TOKEN = os.environ["DISCORD_TOKEN"]
 DISCORD_CHANNEL_ID = int(os.environ["DISCORD_CHANNEL_ID"])
 DISCORD_RESULTS_CHANNEL_ID = int(os.environ["DISCORD_RESULTS_CHANNEL_ID"])
+_MOD_CHANNEL_RAW = os.environ.get("DISCORD_MOD_CHANNEL_ID")
+DISCORD_MOD_CHANNEL_ID: int | None = int(_MOD_CHANNEL_RAW) if _MOD_CHANNEL_RAW else None
+BOT_MODE = os.environ.get("BOT_MODE", "slides")
 GOOGLE_CREDS_FILE = os.environ.get("GOOGLE_CREDS_FILE", "service_account.json")
 DRIVE_FOLDER_ID = os.environ.get("DRIVE_FOLDER_ID")
 STATE_FILE = os.environ.get("STATE_FILE", "state.json")
 TEMPLATE_DECK_ID = os.environ["TEMPLATE_DECK_ID"]
+MOD_ROLE_NAME = os.environ.get("MOD_ROLE_NAME", "Mod")
 
 MARKER_PREFIX = "GUESS CHAT"
 SUBMISSION_PREFIX = "SUBMISSION"
@@ -1064,6 +1068,13 @@ async def generate_slides(client: discord.Client) -> None:
         print("[info] Posted results message.")
 
         # Send error notifications for processing issues
+        error_channel = None
+        if DISCORD_MOD_CHANNEL_ID is not None:
+            error_channel = client.get_channel(DISCORD_MOD_CHANNEL_ID)
+            if error_channel is None:
+                print(f"[warn] Could not find mod channel {DISCORD_MOD_CHANNEL_ID}; falling back to results channel")
+        if error_channel is None:
+            error_channel = results_channel
         guild_id = channel.guild.id if channel.guild else None
         for err in errors:
             s_url = slide_url(named_pres_id, err.get("slide_id", ""))
@@ -1077,20 +1088,97 @@ async def generate_slides(client: discord.Client) -> None:
                 m_url = discord_message_url(guild_id, DISCORD_CHANNEL_ID, m_id)
                 parts.append(f"([message]({m_url}))")
             parts.append(f": {err['issue']}")
-            await results_channel.send(" ".join(parts))
+            await error_channel.send(" ".join(parts))
         if errors:
             print(f"[info] Sent {len(errors)} error notification(s).")
 
-    # Persist state
-    state = {
+    # Persist state (preserve keys written by other modes, e.g. last_announced_mod_msg_id)
+    prev_state = load_state()
+    prev_state.update({
         "marker_id": marker_id,
         "topic": topic,
         "named_pres_id": named_pres_id,
         "anon_pres_id": anon_pres_id,
         "processed_ids": list(processed_ids),
-    }
+    })
+    state = prev_state
     await asyncio.to_thread(save_state, state)
     print("[info] State saved.")
+
+
+# ---------------------------------------------------------------------------
+# Mod-channel announcement flow
+# ---------------------------------------------------------------------------
+
+
+def _has_mod_role(member: discord.Member) -> bool:
+    """Return True if *member* has a role named ``MOD_ROLE_NAME``."""
+    return any(role.name == MOD_ROLE_NAME for role in member.roles)
+
+
+async def check_mod_and_announce(client: discord.Client) -> None:
+    """Read the mod channel for a GUESS CHAT announcement and post it to the submissions channel.
+
+    Only messages authored by members with the *Mod* role are considered.
+    The most recent matching message is used.
+    """
+    if DISCORD_MOD_CHANNEL_ID is None:
+        print("[error] DISCORD_MOD_CHANNEL_ID is not set; cannot check mod channel.")
+        return
+
+    mod_channel = client.get_channel(DISCORD_MOD_CHANNEL_ID)
+    if mod_channel is None:
+        print(f"[error] Could not find mod channel {DISCORD_MOD_CHANNEL_ID}")
+        return
+
+    # Search for the most recent GUESS CHAT announcement from a Mod
+    announcement_msg = None
+    async for msg in mod_channel.history(limit=500):
+        # Only consider messages from members with the Mod role.
+        # msg.author may be a discord.User if the member is not cached; try to resolve it.
+        member: discord.Member | None
+        if isinstance(msg.author, discord.Member):
+            member = msg.author
+        else:
+            if msg.guild is None:
+                continue
+            try:
+                member = await msg.guild.fetch_member(msg.author.id)
+            except (discord.NotFound, discord.HTTPException):
+                member = None
+
+        if member is None:
+            continue
+        if not _has_mod_role(member):
+            continue
+        first_line = msg.content.split("\n", 1)[0]
+        if _MARKER_LINE_RE.match(first_line):
+            announcement_msg = msg
+            break
+
+    if announcement_msg is None:
+        print("[info] No GUESS CHAT announcement from a Mod found in the mod channel.")
+        return
+
+    # Check if we already forwarded this announcement
+    state = load_state()
+    if str(announcement_msg.id) == state.get("last_announced_mod_msg_id"):
+        print("[info] Already announced this mod message; nothing to do.")
+        return
+
+    # Post the announcement in the submissions (guess chat) channel
+    submissions_channel = client.get_channel(DISCORD_CHANNEL_ID)
+    if submissions_channel is None:
+        print(f"[error] Could not find submissions channel {DISCORD_CHANNEL_ID}")
+        return
+
+    await submissions_channel.send(announcement_msg.content)
+    print(f"[info] Forwarded GUESS CHAT announcement to submissions channel.")
+
+    # Persist the announced message ID to avoid re-announcing
+    state["last_announced_mod_msg_id"] = str(announcement_msg.id)
+    await asyncio.to_thread(save_state, state)
+    print("[info] State saved (announcement tracked).")
 
 
 # ---------------------------------------------------------------------------
@@ -1102,7 +1190,10 @@ class OneShotClient(discord.Client):
     async def on_ready(self) -> None:
         print(f"[info] Logged in as {self.user}")
         try:
-            await generate_slides(self)
+            if BOT_MODE == "announce":
+                await check_mod_and_announce(self)
+            else:
+                await generate_slides(self)
         finally:
             await self.close()
 

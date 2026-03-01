@@ -13,7 +13,7 @@ os.environ.setdefault("DISCORD_CHANNEL_ID", "1")
 os.environ.setdefault("DISCORD_RESULTS_CHANNEL_ID", "2")
 os.environ.setdefault("TEMPLATE_DECK_ID", "tpl")
 
-from weekly_slides_bot import build_deck, append_slides, generate_slides, slide_url, discord_message_url
+from weekly_slides_bot import build_deck, append_slides, generate_slides, slide_url, discord_message_url, format_error_message
 
 
 class _ClientHelper:
@@ -295,3 +295,41 @@ class TestURLHelpers:
     def test_discord_message_url_format(self):
         url = discord_message_url(111, 222, "333")
         assert url == "https://discord.com/channels/111/222/333"
+
+
+class TestFormatErrorMessage:
+    """Tests for the format_error_message helper."""
+
+    def test_multiline_output(self):
+        err = {"author": "Alice", "issue": "Upload failed", "slide_number": 3, "slide_id": "s3", "message_id": "99"}
+        result = format_error_message(err, "pres1", guild_id=10, channel_id=20)
+        lines = result.split("\n")
+        assert len(lines) == 3
+
+    def test_contains_author_and_issue(self):
+        err = {"author": "Bob", "issue": "Bad image", "slide_number": 2, "slide_id": "s2", "message_id": "50"}
+        result = format_error_message(err, "pres1", guild_id=10, channel_id=20)
+        assert "Bob" in result
+        assert "Bad image" in result
+
+    def test_contains_slide_link(self):
+        err = {"author": "Eve", "issue": "Oops", "slide_number": 4, "slide_id": "s4", "message_id": "60"}
+        result = format_error_message(err, "pres1", guild_id=10, channel_id=20)
+        assert "slide 4" in result
+        assert "s4" in result
+
+    def test_contains_message_link_when_guild_present(self):
+        err = {"author": "Eve", "issue": "Oops", "slide_number": 1, "slide_id": "s1", "message_id": "70"}
+        result = format_error_message(err, "pres1", guild_id=10, channel_id=20)
+        assert "message" in result.lower()
+        assert "70" in result
+
+    def test_no_message_link_without_guild(self):
+        err = {"author": "Eve", "issue": "Oops", "slide_number": 1, "slide_id": "s1", "message_id": "70"}
+        result = format_error_message(err, "pres1", guild_id=None, channel_id=20)
+        assert "discord.com" not in result
+
+    def test_no_message_link_without_message_id(self):
+        err = {"author": "Eve", "issue": "Oops", "slide_number": 1, "slide_id": "s1", "message_id": ""}
+        result = format_error_message(err, "pres1", guild_id=10, channel_id=20)
+        assert "discord.com" not in result

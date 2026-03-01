@@ -149,6 +149,16 @@ def presentation_url(pres_id: str) -> str:
     return f"https://docs.google.com/presentation/d/{pres_id}/edit?usp=sharing"
 
 
+def slide_url(pres_id: str, slide_id: str) -> str:
+    """Return a direct URL to a specific slide in a Google Slides presentation."""
+    return f"https://docs.google.com/presentation/d/{pres_id}/edit#slide=id.{slide_id}"
+
+
+def discord_message_url(guild_id: int, channel_id: int, message_id: str) -> str:
+    """Return a direct URL to a Discord message."""
+    return f"https://discord.com/channels/{guild_id}/{channel_id}/{message_id}"
+
+
 # ---------------------------------------------------------------------------
 # Image helpers
 # ---------------------------------------------------------------------------
@@ -487,6 +497,12 @@ def build_deck(
 
         # Insert images
         if image_urls:
+            # Slide number after template deletion: template_index + i + 1 (1-indexed)
+            err_meta = {
+                "slide_number": template_index + i + 1,
+                "slide_id": new_slide_id,
+                "message_id": sub.get("id", ""),
+            }
             drive_urls_raw = [
                 upload_image_to_drive(drive_svc, u, image_cache)
                 for u in image_urls[:4]
@@ -496,6 +512,7 @@ def build_deck(
                 errors.append({
                     "author": author,
                     "issue": f"Failed to upload {failed_uploads} image(s) to Google Drive",
+                    **err_meta,
                 })
             drive_urls = [u for u in drive_urls_raw if u]
             if drive_urls:
@@ -511,6 +528,7 @@ def build_deck(
                     errors.append({
                         "author": author,
                         "issue": f"Could not insert image(s) into slide: {exc}",
+                        **err_meta,
                     })
 
     # Delete the original template slide
@@ -656,6 +674,11 @@ def append_slides(
 
         # Insert images
         if image_urls:
+            err_meta = {
+                "slide_number": insert_before_index + i + 1,  # 1-indexed
+                "slide_id": new_slide_id,
+                "message_id": sub.get("id", ""),
+            }
             drive_urls_raw = [
                 upload_image_to_drive(drive_svc, u, image_cache)
                 for u in image_urls[:4]
@@ -665,6 +688,7 @@ def append_slides(
                 errors.append({
                     "author": author,
                     "issue": f"Failed to upload {failed_uploads} image(s) to Google Drive",
+                    **err_meta,
                 })
             drive_urls = [u for u in drive_urls_raw if u]
             if drive_urls:
@@ -680,6 +704,7 @@ def append_slides(
                     errors.append({
                         "author": author,
                         "issue": f"Could not insert image(s) into slide: {exc}",
+                        **err_meta,
                     })
 
     return errors
@@ -847,9 +872,16 @@ async def generate_slides(client: discord.Client) -> None:
         print("[info] Posted results message.")
 
         # Send error notifications for processing issues
+        guild_id = channel.guild.id if channel.guild else 0
         for err in errors:
+            s_url = slide_url(named_pres_id, err.get("slide_id", ""))
+            s_num = err.get("slide_number", "?")
+            m_id = err.get("message_id", "")
+            m_url = discord_message_url(guild_id, DISCORD_CHANNEL_ID, m_id)
             await results_channel.send(
-                f"⚠️ **Processing issue for {err['author']}**: {err['issue']}"
+                f"⚠️ **Processing issue for {err['author']}** "
+                f"on [slide {s_num}]({s_url}) "
+                f"([message]({m_url})): {err['issue']}"
             )
         if errors:
             print(f"[info] Sent {len(errors)} error notification(s).")

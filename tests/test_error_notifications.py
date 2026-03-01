@@ -13,7 +13,7 @@ os.environ.setdefault("DISCORD_CHANNEL_ID", "1")
 os.environ.setdefault("DISCORD_RESULTS_CHANNEL_ID", "2")
 os.environ.setdefault("TEMPLATE_DECK_ID", "tpl")
 
-from weekly_slides_bot import build_deck, append_slides, generate_slides
+from weekly_slides_bot import build_deck, append_slides, generate_slides, slide_url, discord_message_url
 
 
 class _ClientHelper:
@@ -81,6 +81,9 @@ class TestBuildDeckReturnsErrors:
         assert len(errors) == 1
         assert errors[0]["author"] == "Alice"
         assert "image" in errors[0]["issue"].lower()
+        assert "slide_number" in errors[0]
+        assert "slide_id" in errors[0]
+        assert errors[0]["message_id"] == "1"
 
     def test_returns_empty_when_no_issues(self):
         """No errors should be returned when everything succeeds."""
@@ -196,6 +199,9 @@ class TestAppendSlidesReturnsErrors:
 
         assert len(errors) == 1
         assert errors[0]["author"] == "Carol"
+        assert "slide_number" in errors[0]
+        assert "slide_id" in errors[0]
+        assert errors[0]["message_id"] == "1"
 
 
 class TestGenerateSlidesSendsErrors:
@@ -203,7 +209,13 @@ class TestGenerateSlidesSendsErrors:
 
     @pytest.mark.asyncio
     @patch("weekly_slides_bot.save_state")
-    @patch("weekly_slides_bot.build_deck", return_value=[{"author": "Dave", "issue": "Image upload failed"}])
+    @patch("weekly_slides_bot.build_deck", return_value=[{
+        "author": "Dave",
+        "issue": "Image upload failed",
+        "slide_number": 2,
+        "slide_id": "slide_abc",
+        "message_id": "200",
+    }])
     @patch("weekly_slides_bot.share_presentation")
     @patch("weekly_slides_bot.copy_presentation", return_value="pres_id")
     @patch("weekly_slides_bot.get_google_services", return_value=(MagicMock(), MagicMock()))
@@ -224,6 +236,7 @@ class TestGenerateSlidesSendsErrors:
         sub_msg.author.id = 999
         sub_msg.author.display_name = "Dave"
         sub_msg.guild = MagicMock()
+        sub_msg.guild.id = 12345
         sub_msg.guild.get_member.return_value = MagicMock(display_name="Dave")
 
         mock_client, mock_results_channel = _ClientHelper.make_client(marker_msg, sub_msg)
@@ -235,6 +248,10 @@ class TestGenerateSlidesSendsErrors:
         error_msg = send_calls[1].args[0]
         assert "Dave" in error_msg
         assert "Image upload failed" in error_msg
+        assert "slide 2" in error_msg
+        assert "slide_abc" in error_msg
+        assert "message" in error_msg.lower()
+        assert "200" in error_msg
 
     @pytest.mark.asyncio
     @patch("weekly_slides_bot.save_state")
@@ -266,3 +283,15 @@ class TestGenerateSlidesSendsErrors:
 
         # Only 1 send call (the results message)
         assert mock_results_channel.send.call_count == 1
+
+
+class TestURLHelpers:
+    """Tests for slide_url and discord_message_url helpers."""
+
+    def test_slide_url_format(self):
+        url = slide_url("pres123", "slide_abc")
+        assert url == "https://docs.google.com/presentation/d/pres123/edit#slide=id.slide_abc"
+
+    def test_discord_message_url_format(self):
+        url = discord_message_url(111, 222, "333")
+        assert url == "https://discord.com/channels/111/222/333"

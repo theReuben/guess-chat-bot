@@ -42,7 +42,8 @@ guess-chat-bot/
 ├── tests/
 │   ├── __init__.py
 │   ├── test_cleanup.py             # Tests for delete_drive_file
-│   └── test_display_name.py       # Tests for intents config and author display name
+│   ├── test_display_name.py        # Tests for intents config and author display name
+│   └── test_image_handling.py      # Tests for image layout and image-only submissions
 └── weekly_slides_bot.py            # Entire bot logic (single module)
 ```
 

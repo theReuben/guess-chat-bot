@@ -527,7 +527,7 @@ def build_deck(
                     print(f"[warn] Could not insert images for '{author}': {exc}")
                     errors.append({
                         "author": author,
-                        "issue": f"Could not insert image(s) into slide: {exc}",
+                        "issue": "Could not insert image(s) into slide",
                         **err_meta,
                     })
 
@@ -703,7 +703,7 @@ def append_slides(
                     print(f"[warn] Could not insert images for '{author}': {exc}")
                     errors.append({
                         "author": author,
-                        "issue": f"Could not insert image(s) into slide: {exc}",
+                        "issue": "Could not insert image(s) into slide",
                         **err_meta,
                     })
 

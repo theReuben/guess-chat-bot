@@ -736,6 +736,29 @@ def format_results_message(
     return "\n".join(lines)
 
 
+def format_error_message(
+    err: dict,
+    pres_id: str,
+    guild_id: int | None,
+    channel_id: int,
+) -> str:
+    """Build a nicely formatted Discord message for a processing error."""
+    s_url = slide_url(pres_id, err.get("slide_id", ""))
+    s_num = err.get("slide_number", "?")
+    m_id = err.get("message_id", "")
+
+    lines = [
+        f"⚠️ **Processing issue for {err['author']}**",
+        err["issue"],
+    ]
+    links: list[str] = [f"[slide {s_num}]({s_url})"]
+    if guild_id is not None and m_id:
+        m_url = discord_message_url(guild_id, channel_id, m_id)
+        links.append(f"[message]({m_url})")
+    lines.append(" · ".join(links))
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Core logic
 # ---------------------------------------------------------------------------
@@ -874,18 +897,8 @@ async def generate_slides(client: discord.Client) -> None:
         # Send error notifications for processing issues
         guild_id = channel.guild.id if channel.guild else None
         for err in errors:
-            s_url = slide_url(named_pres_id, err.get("slide_id", ""))
-            s_num = err.get("slide_number", "?")
-            m_id = err.get("message_id", "")
-            parts = [
-                f"⚠️ **Processing issue for {err['author']}**",
-                f"on [slide {s_num}]({s_url})",
-            ]
-            if guild_id is not None and m_id:
-                m_url = discord_message_url(guild_id, DISCORD_CHANNEL_ID, m_id)
-                parts.append(f"([message]({m_url}))")
-            parts.append(f": {err['issue']}")
-            await results_channel.send(" ".join(parts))
+            err_text = format_error_message(err, named_pres_id, guild_id, DISCORD_CHANNEL_ID)
+            await results_channel.send(err_text)
         if errors:
             print(f"[info] Sent {len(errors)} error notification(s).")
 

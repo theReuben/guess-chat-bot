@@ -51,6 +51,13 @@ _MARKER_LINE_RE = re.compile(r"^[#*_ \t]*(GUESS\s+CHAT)\b\s*(.*)", re.IGNORECASE
 _SUBMISSION_RE = re.compile(r"^[#*_ \t]*(SUBMISSION)\b[*_]*\s*(.*)", re.IGNORECASE | re.DOTALL)
 _URL_RE = re.compile(r"https?://[^\s<>\"]+")
 
+# YouTube URL pattern – matches standard, short, and embed URLs.
+_YOUTUBE_URL_RE = re.compile(
+    r"(?:https?://)?(?:www\.)?(?:youtube\.com/watch\?[^\s]*v=|youtu\.be/|youtube\.com/embed/)"
+    r"(?P<id>[A-Za-z0-9_-]{11})"
+    r"[^\s]*",
+)
+
 
 # ---------------------------------------------------------------------------
 # State helpers
@@ -329,19 +336,32 @@ def _body_resize_requests(page_elements: list[dict], has_images: bool) -> list[d
     ]
 
 
+def _to_utf16_index(text: str, index: int) -> int:
+    """Convert a Python string index to a UTF-16 code unit index for Slides.
+
+    Google Slides text indices are UTF-16 code unit offsets, whereas Python
+    string indices are Unicode code point offsets. This helper converts
+    from the latter to the former.
+    """
+    # utf-16-le has no BOM; each code unit is 2 bytes, so bytes/2 == code units
+    return len(text[:index].encode("utf-16-le")) // 2
+
+
 def _hyperlink_requests(element_id: str, body_text: str) -> list[dict]:
     """Return updateTextStyle requests to make URLs in *body_text* clickable hyperlinks."""
     reqs: list[dict] = []
     for m in _URL_RE.finditer(body_text):
         url = m.group(0)
+        start = _to_utf16_index(body_text, m.start())
+        end = _to_utf16_index(body_text, m.end())
         reqs.append(
             {
                 "updateTextStyle": {
                     "objectId": element_id,
                     "textRange": {
                         "type": "FIXED_RANGE",
-                        "startIndex": m.start(),
-                        "endIndex": m.end(),
+                        "startIndex": start,
+                        "endIndex": end,
                     },
                     "style": {"link": {"url": url}},
                     "fields": "link",
@@ -349,6 +369,75 @@ def _hyperlink_requests(element_id: str, body_text: str) -> list[dict]:
             }
         )
     return reqs
+
+
+# ---------------------------------------------------------------------------
+# YouTube helpers
+# ---------------------------------------------------------------------------
+
+
+def extract_youtube_ids(text: str) -> list[str]:
+    """Return a list of YouTube video IDs found in *text*."""
+    return [m.group("id") for m in _YOUTUBE_URL_RE.finditer(text)]
+
+
+def strip_youtube_urls(text: str) -> str:
+    """Remove YouTube URLs from *text* and collapse extra whitespace."""
+    cleaned = _YOUTUBE_URL_RE.sub("", text)
+    # Collapse whitespace left behind but preserve intentional newlines
+    cleaned = re.sub(r"[ \t]+", " ", cleaned)
+    return cleaned.strip()
+
+
+def _video_requests(
+    slide_id: str,
+    video_ids: list[str],
+    has_text: bool = True,
+) -> list[dict]:
+    """Return createVideo requests for YouTube videos on a slide.
+
+    Layout mirrors ``_image_requests``: videos are placed in the right
+    portion when *has_text* is True and use the full available area
+    when *has_text* is False.  Only the first video is embedded.
+    """
+    if not video_ids:
+        return []
+
+    vid = video_ids[0]
+
+    if has_text:
+        area_x = 400
+        area_y = _AUTHOR_BAR_PT
+        area_w = _SLIDE_W_PT - area_x - _IMG_MARGIN_PT
+        area_h = _SLIDE_H_PT - area_y - _IMG_MARGIN_PT
+    else:
+        area_x = _IMG_MARGIN_PT
+        area_y = _AUTHOR_BAR_PT
+        area_w = _SLIDE_W_PT - 2 * _IMG_MARGIN_PT
+        area_h = _SLIDE_H_PT - area_y - _IMG_MARGIN_PT
+
+    return [
+        {
+            "createVideo": {
+                "source": "YOUTUBE",
+                "id": vid,
+                "elementProperties": {
+                    "pageObjectId": slide_id,
+                    "size": {
+                        "width": {"magnitude": area_w * _PT, "unit": "EMU"},
+                        "height": {"magnitude": area_h * _PT, "unit": "EMU"},
+                    },
+                    "transform": {
+                        "scaleX": 1,
+                        "scaleY": 1,
+                        "translateX": area_x * _PT,
+                        "translateY": area_y * _PT,
+                        "unit": "EMU",
+                    },
+                },
+            }
+        }
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -421,6 +510,7 @@ def build_deck(
         author = sub["author"]
         body_text = sub["body"]
         image_urls = sub.get("images", [])
+        youtube_ids = sub.get("youtube_ids", [])
 
         # Duplicate the template slide
         dup_resp = execute_with_retry(
@@ -469,8 +559,9 @@ def build_deck(
 
         # Post-processing: resize body for text-only, add hyperlinks for URLs.
         # Both operations require fetching the slide, so they share the fetch.
+        has_media = bool(image_urls) or bool(youtube_ids)
         has_urls = bool(_URL_RE.search(body_text))
-        if not image_urls or has_urls:
+        if not has_media or has_urls:
             new_pres = execute_with_retry(
                 slides_svc.presentations().get(presentationId=pres_id)
             )
@@ -479,7 +570,7 @@ def build_deck(
             )
             page_elements = new_slide.get("pageElements", [])
             post_reqs: list[dict] = []
-            if not image_urls:
+            if not has_media:
                 post_reqs.extend(_body_resize_requests(page_elements, False))
             if has_urls:
                 body_elem = _find_body_element(page_elements)
@@ -527,9 +618,21 @@ def build_deck(
                     print(f"[warn] Could not insert images for '{author}': {exc}")
                     errors.append({
                         "author": author,
-                        "issue": "Could not insert image(s) into slide",
+                        "issue": f"Could not insert image(s) into slide: {exc}",
                         **err_meta,
                     })
+
+        # Embed YouTube video (only when no image attachments to avoid overlap)
+        if youtube_ids and not image_urls:
+            try:
+                execute_with_retry(
+                    slides_svc.presentations().batchUpdate(
+                        presentationId=pres_id,
+                        body={"requests": _video_requests(new_slide_id, youtube_ids, has_text=bool(body_text))},
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"[warn] Could not embed YouTube video for '{author}': {exc}")
 
     # Delete the original template slide
     execute_with_retry(
@@ -578,6 +681,7 @@ def append_slides(
         author = sub["author"]
         body_text = sub["body"]
         image_urls = sub.get("images", [])
+        youtube_ids = sub.get("youtube_ids", [])
 
         # Duplicate an existing submission slide
         dup_resp = execute_with_retry(
@@ -634,9 +738,14 @@ def append_slides(
                 clear_requests.append(
                     {"deleteObject": {"objectId": elem["objectId"]}}
                 )
+            elif elem.get("video"):
+                clear_requests.append(
+                    {"deleteObject": {"objectId": elem["objectId"]}}
+                )
+        has_media = bool(image_urls) or bool(youtube_ids)
         # Resize body text box for text-only submissions
         resize_reqs = _body_resize_requests(
-            new_slide.get("pageElements", []), has_images=bool(image_urls)
+            new_slide.get("pageElements", []), has_images=has_media
         )
         all_clear_reqs = clear_requests + resize_reqs
         if all_clear_reqs:
@@ -703,9 +812,21 @@ def append_slides(
                     print(f"[warn] Could not insert images for '{author}': {exc}")
                     errors.append({
                         "author": author,
-                        "issue": "Could not insert image(s) into slide",
+                        "issue": f"Could not insert image(s) into slide: {exc}",
                         **err_meta,
                     })
+
+        # Embed YouTube video (only when no image attachments to avoid overlap)
+        if youtube_ids and not image_urls:
+            try:
+                execute_with_retry(
+                    slides_svc.presentations().batchUpdate(
+                        presentationId=pres_id,
+                        body={"requests": _video_requests(new_slide_id, youtube_ids, has_text=bool(body_text))},
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"[warn] Could not embed YouTube video for '{author}': {exc}")
 
     return errors
 
@@ -826,12 +947,16 @@ async def generate_slides(client: discord.Client) -> None:
                 _member_cache[uid] = member
             cached_member = _member_cache.get(uid)
             author_name = cached_member.display_name if cached_member is not None else msg.author.display_name
+            youtube_ids = extract_youtube_ids(body)
+            if youtube_ids:
+                body = strip_youtube_urls(body)
             all_submissions.append(
                 {
                     "id": str(msg.id),
                     "author": author_name,
                     "body": body,
                     "images": images,
+                    "youtube_ids": youtube_ids,
                 }
             )
 
@@ -897,8 +1022,18 @@ async def generate_slides(client: discord.Client) -> None:
         # Send error notifications for processing issues
         guild_id = channel.guild.id if channel.guild else None
         for err in errors:
-            err_text = format_error_message(err, named_pres_id, guild_id, DISCORD_CHANNEL_ID)
-            await results_channel.send(err_text)
+            s_url = slide_url(named_pres_id, err.get("slide_id", ""))
+            s_num = err.get("slide_number", "?")
+            m_id = err.get("message_id", "")
+            parts = [
+                f"⚠️ **Processing issue for {err['author']}**",
+                f"on [slide {s_num}]({s_url})",
+            ]
+            if guild_id is not None and m_id:
+                m_url = discord_message_url(guild_id, DISCORD_CHANNEL_ID, m_id)
+                parts.append(f"([message]({m_url}))")
+            parts.append(f": {err['issue']}")
+            await results_channel.send(" ".join(parts))
         if errors:
             print(f"[info] Sent {len(errors)} error notification(s).")
 

@@ -336,19 +336,32 @@ def _body_resize_requests(page_elements: list[dict], has_images: bool) -> list[d
     ]
 
 
+def _to_utf16_index(text: str, index: int) -> int:
+    """Convert a Python string index to a UTF-16 code unit index for Slides.
+
+    Google Slides text indices are UTF-16 code unit offsets, whereas Python
+    string indices are Unicode code point offsets. This helper converts
+    from the latter to the former.
+    """
+    # utf-16-le has no BOM; each code unit is 2 bytes, so bytes/2 == code units
+    return len(text[:index].encode("utf-16-le")) // 2
+
+
 def _hyperlink_requests(element_id: str, body_text: str) -> list[dict]:
     """Return updateTextStyle requests to make URLs in *body_text* clickable hyperlinks."""
     reqs: list[dict] = []
     for m in _URL_RE.finditer(body_text):
         url = m.group(0)
+        start = _to_utf16_index(body_text, m.start())
+        end = _to_utf16_index(body_text, m.end())
         reqs.append(
             {
                 "updateTextStyle": {
                     "objectId": element_id,
                     "textRange": {
                         "type": "FIXED_RANGE",
-                        "startIndex": m.start(),
-                        "endIndex": m.end(),
+                        "startIndex": start,
+                        "endIndex": end,
                     },
                     "style": {"link": {"url": url}},
                     "fields": "link",

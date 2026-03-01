@@ -80,6 +80,73 @@ class TestBuildDeckImageInsertionError:
     """build_deck must not crash when inserting images into slides fails."""
 
     @patch("weekly_slides_bot.upload_image_to_drive", return_value="https://drive.google.com/uc?id=123")
+    def test_build_deck_error_message_nonempty_for_empty_str_exception(self, _upload):
+        """When str(exc) is empty, the error issue must still contain useful info."""
+        call_count = {"n": 0}
+        error = Exception()  # str(Exception()) == ""
+
+        def batch_side_effect(*args, **kwargs):
+            call_count["n"] += 1
+            req = MagicMock()
+
+            def execute():
+                if call_count["n"] == 4:
+                    raise error
+                return {
+                    "replies": [{"duplicateObject": {"objectId": "new_slide_1"}}]
+                }
+
+            req.execute = execute
+            return req
+
+        slides_svc = MagicMock()
+        slides_svc.presentations().get().execute.return_value = {
+            "slides": [
+                {"objectId": "title_slide", "pageElements": []},
+                {
+                    "objectId": "template_slide",
+                    "pageElements": [
+                        {
+                            "objectId": "author_elem",
+                            "shape": {
+                                "shapeType": "TEXT_BOX",
+                                "text": {
+                                    "textElements": [
+                                        {"textRun": {"content": "{{AUTHOR}}"}}
+                                    ],
+                                },
+                            },
+                            "size": {
+                                "width": {"magnitude": 400 * 12700},
+                                "height": {"magnitude": 55 * 12700},
+                            },
+                            "transform": {"translateX": 0, "translateY": 0},
+                        }
+                    ],
+                },
+                {"objectId": "end_slide", "pageElements": []},
+            ]
+        }
+        slides_svc.presentations().batchUpdate.side_effect = batch_side_effect
+
+        drive_svc = MagicMock()
+        submissions = [
+            {
+                "id": "1",
+                "author": "TestUser",
+                "body": "My answer",
+                "images": ["https://cdn.discord.com/img.png"],
+            }
+        ]
+
+        errors = build_deck(slides_svc, drive_svc, "pres123", "Topic", submissions, named=True, image_cache={})
+        assert len(errors) >= 1
+        issue = errors[0]["issue"]
+        # The issue must not end with ": " — it must contain real detail
+        assert not issue.endswith(": ")
+        assert "Exception()" in issue
+
+    @patch("weekly_slides_bot.upload_image_to_drive", return_value="https://drive.google.com/uc?id=123")
     def test_build_deck_continues_on_image_http_error(self, _upload):
         """An HttpError during image insertion should be caught, not raised."""
         call_count = {"n": 0}

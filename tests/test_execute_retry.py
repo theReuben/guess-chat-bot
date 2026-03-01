@@ -118,7 +118,7 @@ class TestExecuteWithRetryBackoff:
         execute_with_retry(request, max_retries=5)
         assert mock_sleep.call_count == 3
         waits = [c.args[0] for c in mock_sleep.call_args_list]
-        # Each wait should be larger than the previous (2^attempt + jitter)
-        assert waits[0] >= 1.0  # 2^0 + jitter
-        assert waits[1] >= 2.0  # 2^1 + jitter
-        assert waits[2] >= 4.0  # 2^2 + jitter
+        # Each wait should be 2^attempt + jitter (jitter is random.random() ∈ [0,1))
+        assert 1.0 <= waits[0] < 2.0  # 2^0 + jitter
+        assert 2.0 <= waits[1] < 3.0  # 2^1 + jitter
+        assert 4.0 <= waits[2] < 5.0  # 2^2 + jitter

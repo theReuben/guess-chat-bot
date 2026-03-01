@@ -66,7 +66,7 @@ def save_state(state: dict) -> None:
 _RETRYABLE_STATUS_CODES = (429, 500, 502, 503)
 
 
-def execute_with_retry(request, max_retries: int = 5):
+def execute_with_retry(request, max_retries: int = 5) -> Any:
     """Execute a Google API request with exponential backoff on transient errors."""
     for attempt in range(max_retries + 1):
         try:

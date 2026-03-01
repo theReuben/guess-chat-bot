@@ -15,7 +15,7 @@ os.environ.setdefault("TEMPLATE_DECK_ID", "tpl")
 
 from googleapiclient.errors import HttpError
 
-from weekly_slides_bot import append_slides, build_deck
+from weekly_slides_bot import _insert_images, append_slides, build_deck
 
 
 def _make_http_error(status: int, body: str = "") -> HttpError:
@@ -90,7 +90,7 @@ class TestBuildDeckImageInsertionError:
             req = MagicMock()
 
             def execute():
-                if call_count["n"] == 4:
+                if call_count["n"] in (4, 5):
                     raise error
                 return {
                     "replies": [{"duplicateObject": {"objectId": "new_slide_1"}}]
@@ -325,3 +325,116 @@ class TestAppendSlidesImageInsertionError:
 
         # Should NOT raise
         append_slides(slides_svc, drive_svc, "pres123", submissions, named=True, image_cache={})
+
+
+class TestInsertImagesHelper:
+    """Tests for the _insert_images fallback behavior."""
+
+    def test_returns_empty_on_success(self):
+        """No errors returned when batch insertion succeeds."""
+        svc = MagicMock()
+        svc.presentations().batchUpdate().execute.return_value = {}
+        result = _insert_images(svc, "pres", "slide1", ["https://img/1"], True, "A")
+        assert result == []
+
+    def test_returns_empty_when_no_urls(self):
+        """No errors returned for empty URL list."""
+        svc = MagicMock()
+        result = _insert_images(svc, "pres", "slide1", [], True, "A")
+        assert result == []
+
+    def test_fallback_succeeds_returns_empty(self):
+        """When batch fails but individual retries succeed, no errors."""
+        call_count = {"n": 0}
+
+        def side_effect(*a, **kw):
+            call_count["n"] += 1
+            req = MagicMock()
+            if call_count["n"] == 1:
+                req.execute.side_effect = Exception("batch fail")
+            else:
+                req.execute.return_value = {}
+            return req
+
+        svc = MagicMock()
+        svc.presentations().batchUpdate.side_effect = side_effect
+        result = _insert_images(svc, "pres", "slide1", ["https://img/1"], True, "A")
+        assert result == []
+
+    def test_fallback_fails_returns_errors(self):
+        """When both batch and individual retries fail, error details returned."""
+        def side_effect(*a, **kw):
+            req = MagicMock()
+            req.execute.side_effect = Exception("permanent fail")
+            return req
+
+        svc = MagicMock()
+        svc.presentations().batchUpdate.side_effect = side_effect
+        result = _insert_images(svc, "pres", "slide1", ["https://img/1"], True, "A")
+        assert len(result) == 1
+        assert "permanent fail" in result[0]
+
+    def test_partial_fallback_failure(self):
+        """When some individual images fail, only those produce errors."""
+        call_count = {"n": 0}
+
+        def side_effect(*a, **kw):
+            call_count["n"] += 1
+            req = MagicMock()
+            if call_count["n"] == 1:
+                # Batch fails
+                req.execute.side_effect = Exception("batch fail")
+            elif call_count["n"] == 2:
+                # First individual succeeds
+                req.execute.return_value = {}
+            else:
+                # Second individual fails
+                req.execute.side_effect = Exception("img2 fail")
+            return req
+
+        svc = MagicMock()
+        svc.presentations().batchUpdate.side_effect = side_effect
+        result = _insert_images(
+            svc, "pres", "slide1",
+            ["https://img/1", "https://img/2"], True, "A",
+        )
+        assert len(result) == 1
+        assert "img2 fail" in result[0]
+
+    def test_empty_exception_str_uses_repr(self):
+        """When str(exc) is empty, repr(exc) is used for error detail."""
+        def side_effect(*a, **kw):
+            req = MagicMock()
+            req.execute.side_effect = Exception()  # str(Exception()) == ""
+            return req
+
+        svc = MagicMock()
+        svc.presentations().batchUpdate.side_effect = side_effect
+        result = _insert_images(svc, "pres", "slide1", ["https://img/1"], True, "A")
+        assert len(result) == 1
+        assert "Exception()" in result[0]
+
+
+class TestUploadImageUrl:
+    """upload_image_to_drive must produce lh3.googleusercontent.com URLs."""
+
+    @patch("weekly_slides_bot.execute_with_retry")
+    @patch("weekly_slides_bot.requests.get")
+    def test_url_uses_lh3_format(self, mock_get, mock_exec):
+        from weekly_slides_bot import upload_image_to_drive
+
+        resp = MagicMock()
+        resp.content = b"\x89PNG"
+        resp.headers = {"content-type": "image/png"}
+        mock_get.return_value = resp
+        mock_exec.side_effect = [
+            {"id": "abc123"},  # files().create()
+            {},                # permissions().create()
+        ]
+
+        cache: dict[str, str] = {}
+        result = upload_image_to_drive(MagicMock(), "https://cdn.discord.com/img.png", cache)
+        assert result is not None
+        assert "lh3.googleusercontent.com" in result
+        assert "abc123" in result
+        assert "export=download" not in result

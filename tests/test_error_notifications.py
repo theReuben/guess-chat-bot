@@ -229,9 +229,9 @@ class TestGenerateSlidesSendsErrors:
         mock_client, mock_results_channel = _ClientHelper.make_client(marker_msg, sub_msg)
         await generate_slides(mock_client)
 
-        # Results message + 1 error notification = at least 2 send calls
+        # Results message + 1 error notification = exactly 2 send calls
         send_calls = mock_results_channel.send.call_args_list
-        assert len(send_calls) >= 2
+        assert len(send_calls) == 2
         error_msg = send_calls[1].args[0]
         assert "Dave" in error_msg
         assert "Image upload failed" in error_msg

@@ -457,7 +457,8 @@ def build_deck(
             )
         )
 
-        # Post-processing: resize body for text-only, add hyperlinks for URLs
+        # Post-processing: resize body for text-only, add hyperlinks for URLs.
+        # Both operations require fetching the slide, so they share the fetch.
         has_urls = bool(_URL_RE.search(body_text))
         if not image_urls or has_urls:
             new_pres = execute_with_retry(

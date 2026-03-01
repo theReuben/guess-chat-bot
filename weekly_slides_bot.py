@@ -50,6 +50,13 @@ _MD_PREFIX_RE = re.compile(r"^[#*_ \t]+")
 _MARKER_LINE_RE = re.compile(r"^[#*_ \t]*(GUESS\s+CHAT)\b\s*(.*)", re.IGNORECASE)
 _SUBMISSION_RE = re.compile(r"^[#*_ \t]*(SUBMISSION)\b[*_]*\s*(.*)", re.IGNORECASE | re.DOTALL)
 
+# YouTube URL pattern – matches standard, short, and embed URLs.
+_YOUTUBE_URL_RE = re.compile(
+    r"(?:https?://)?(?:www\.)?(?:youtube\.com/watch\?[^\s]*v=|youtu\.be/|youtube\.com/embed/)"
+    r"(?P<id>[A-Za-z0-9_-]{11})"
+    r"[^\s]*",
+)
+
 # ---------------------------------------------------------------------------
 # State helpers
 # ---------------------------------------------------------------------------
@@ -318,6 +325,75 @@ def _body_resize_requests(page_elements: list[dict], has_images: bool) -> list[d
 
 
 # ---------------------------------------------------------------------------
+# YouTube helpers
+# ---------------------------------------------------------------------------
+
+
+def extract_youtube_ids(text: str) -> list[str]:
+    """Return a list of YouTube video IDs found in *text*."""
+    return [m.group("id") for m in _YOUTUBE_URL_RE.finditer(text)]
+
+
+def strip_youtube_urls(text: str) -> str:
+    """Remove YouTube URLs from *text* and collapse extra whitespace."""
+    cleaned = _YOUTUBE_URL_RE.sub("", text)
+    # Collapse whitespace left behind but preserve intentional newlines
+    cleaned = re.sub(r"[ \t]+", " ", cleaned)
+    return cleaned.strip()
+
+
+def _video_requests(
+    slide_id: str,
+    video_ids: list[str],
+    has_text: bool = True,
+) -> list[dict]:
+    """Return createVideo requests for YouTube videos on a slide.
+
+    Layout mirrors ``_image_requests``: videos are placed in the right
+    portion when *has_text* is True and use the full available area
+    when *has_text* is False.  Only the first video is embedded.
+    """
+    if not video_ids:
+        return []
+
+    vid = video_ids[0]
+
+    if has_text:
+        area_x = 400
+        area_y = _AUTHOR_BAR_PT
+        area_w = _SLIDE_W_PT - area_x - _IMG_MARGIN_PT
+        area_h = _SLIDE_H_PT - area_y - _IMG_MARGIN_PT
+    else:
+        area_x = _IMG_MARGIN_PT
+        area_y = _AUTHOR_BAR_PT
+        area_w = _SLIDE_W_PT - 2 * _IMG_MARGIN_PT
+        area_h = _SLIDE_H_PT - area_y - _IMG_MARGIN_PT
+
+    return [
+        {
+            "createVideo": {
+                "source": "YOUTUBE",
+                "id": vid,
+                "elementProperties": {
+                    "pageObjectId": slide_id,
+                    "size": {
+                        "width": {"magnitude": area_w * _PT, "unit": "EMU"},
+                        "height": {"magnitude": area_h * _PT, "unit": "EMU"},
+                    },
+                    "transform": {
+                        "scaleX": 1,
+                        "scaleY": 1,
+                        "translateX": area_x * _PT,
+                        "translateY": area_y * _PT,
+                        "unit": "EMU",
+                    },
+                },
+            }
+        }
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Slides building
 # ---------------------------------------------------------------------------
 
@@ -382,6 +458,7 @@ def build_deck(
         author = sub["author"]
         body_text = sub["body"]
         image_urls = sub.get("images", [])
+        youtube_ids = sub.get("youtube_ids", [])
 
         # Duplicate the template slide
         dup_resp = execute_with_retry(
@@ -428,8 +505,10 @@ def build_deck(
             )
         )
 
+        has_media = bool(image_urls) or bool(youtube_ids)
+
         # Resize body text box for text-only submissions
-        if not image_urls:
+        if not has_media:
             new_pres = execute_with_retry(
                 slides_svc.presentations().get(presentationId=pres_id)
             )
@@ -462,6 +541,18 @@ def build_deck(
                     )
                 except Exception as exc:  # noqa: BLE001
                     print(f"[warn] Could not insert images for '{author}': {exc}")
+
+        # Embed YouTube video (only when no image attachments to avoid overlap)
+        if youtube_ids and not image_urls:
+            try:
+                execute_with_retry(
+                    slides_svc.presentations().batchUpdate(
+                        presentationId=pres_id,
+                        body={"requests": _video_requests(new_slide_id, youtube_ids, has_text=bool(body_text))},
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"[warn] Could not embed YouTube video for '{author}': {exc}")
 
     # Delete the original template slide
     execute_with_retry(
@@ -503,6 +594,7 @@ def append_slides(
         author = sub["author"]
         body_text = sub["body"]
         image_urls = sub.get("images", [])
+        youtube_ids = sub.get("youtube_ids", [])
 
         # Duplicate an existing submission slide
         dup_resp = execute_with_retry(
@@ -559,9 +651,14 @@ def append_slides(
                 clear_requests.append(
                     {"deleteObject": {"objectId": elem["objectId"]}}
                 )
+            elif elem.get("video"):
+                clear_requests.append(
+                    {"deleteObject": {"objectId": elem["objectId"]}}
+                )
+        has_media = bool(image_urls) or bool(youtube_ids)
         # Resize body text box for text-only submissions
         resize_reqs = _body_resize_requests(
-            new_slide.get("pageElements", []), has_images=bool(image_urls)
+            new_slide.get("pageElements", []), has_images=has_media
         )
         all_clear_reqs = clear_requests + resize_reqs
         if all_clear_reqs:
@@ -614,6 +711,18 @@ def append_slides(
                     )
                 except Exception as exc:  # noqa: BLE001
                     print(f"[warn] Could not insert images for '{author}': {exc}")
+
+        # Embed YouTube video (only when no image attachments to avoid overlap)
+        if youtube_ids and not image_urls:
+            try:
+                execute_with_retry(
+                    slides_svc.presentations().batchUpdate(
+                        presentationId=pres_id,
+                        body={"requests": _video_requests(new_slide_id, youtube_ids, has_text=bool(body_text))},
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"[warn] Could not embed YouTube video for '{author}': {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -709,12 +818,16 @@ async def generate_slides(client: discord.Client) -> None:
                 _member_cache[uid] = member
             cached_member = _member_cache.get(uid)
             author_name = cached_member.display_name if cached_member is not None else msg.author.display_name
+            youtube_ids = extract_youtube_ids(body)
+            if youtube_ids:
+                body = strip_youtube_urls(body)
             all_submissions.append(
                 {
                     "id": str(msg.id),
                     "author": author_name,
                     "body": body,
                     "images": images,
+                    "youtube_ids": youtube_ids,
                 }
             )
 

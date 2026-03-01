@@ -367,16 +367,14 @@ def _body_resize_requests(page_elements: list[dict], has_images: bool) -> list[d
     if elem is None:
         return []
 
+    area_x = _IMG_MARGIN_PT * _PT
+    area_y = _AUTHOR_BAR_PT * _PT
+    area_h = (_SLIDE_H_PT - _AUTHOR_BAR_PT - _IMG_MARGIN_PT) * _PT
+
     if has_images:
-        area_x = _IMG_MARGIN_PT * _PT
-        area_y = _AUTHOR_BAR_PT * _PT
         area_w = (_TEXT_SPLIT_PT - _TEXT_IMG_GAP_PT - _IMG_MARGIN_PT) * _PT
-        area_h = (_SLIDE_H_PT - _AUTHOR_BAR_PT - _IMG_MARGIN_PT) * _PT
     else:
-        area_x = _IMG_MARGIN_PT * _PT
-        area_y = _AUTHOR_BAR_PT * _PT
         area_w = (_SLIDE_W_PT - 2 * _IMG_MARGIN_PT) * _PT
-        area_h = (_SLIDE_H_PT - _AUTHOR_BAR_PT - _IMG_MARGIN_PT) * _PT
 
     elem_w = elem["size"]["width"]["magnitude"]
     elem_h = elem["size"]["height"]["magnitude"]

@@ -219,9 +219,11 @@ def upload_image_to_drive(drive_svc, url: str, cache: dict[str, str]) -> str | N
 _PT = 12700          # EMU per point
 _SLIDE_W_PT = 720    # standard 16:9 slide width in points
 _SLIDE_H_PT = 405    # standard 16:9 slide height in points
-_IMG_MARGIN_PT = 36  # slide edge margin used for image placement
+_IMG_MARGIN_PT = 24  # slide edge margin used for image placement
 _AUTHOR_BAR_PT = 55  # height reserved for the author label at the top
 _BODY_Y_TOLERANCE_PT = 5  # tolerance when matching the body element Y position
+_TEXT_SPLIT_PT = 390  # x-coordinate where images/videos start when text is present
+_TEXT_IMG_GAP_PT = 10  # gap between text area right edge and image area left edge
 
 
 def _image_requests(slide_id: str, image_urls: list[str], has_text: bool = True) -> list[dict]:
@@ -240,15 +242,15 @@ def _image_requests(slide_id: str, image_urls: list[str], has_text: bool = True)
     gap = 8  # points between images
 
     if has_text:
-        area_x = 400
+        area_x = _TEXT_SPLIT_PT
         area_y = _AUTHOR_BAR_PT
-        area_w = _SLIDE_W_PT - area_x - _IMG_MARGIN_PT   # ≈ 284 pt
-        area_h = _SLIDE_H_PT - area_y - _IMG_MARGIN_PT   # ≈ 314 pt
+        area_w = _SLIDE_W_PT - area_x - _IMG_MARGIN_PT
+        area_h = _SLIDE_H_PT - area_y - _IMG_MARGIN_PT
     else:
         area_x = _IMG_MARGIN_PT
         area_y = _AUTHOR_BAR_PT
-        area_w = _SLIDE_W_PT - 2 * _IMG_MARGIN_PT        # ≈ 648 pt
-        area_h = _SLIDE_H_PT - area_y - _IMG_MARGIN_PT   # ≈ 314 pt
+        area_w = _SLIDE_W_PT - 2 * _IMG_MARGIN_PT
+        area_h = _SLIDE_H_PT - area_y - _IMG_MARGIN_PT
 
     img_w = (area_w - gap * (n_cols - 1)) // n_cols
     img_h = (area_h - gap * (n_rows - 1)) // n_rows
@@ -358,19 +360,23 @@ def _body_resize_requests(page_elements: list[dict], has_images: bool) -> list[d
 
     When *has_images* is False (text-only submission) the body text box is
     expanded to fill the full available content area of the slide.  When
-    *has_images* is True the template layout is unchanged and an empty list is
-    returned.
+    *has_images* is True the body text box is constrained to the left portion
+    of the slide so that it does not overlap with images on the right.
     """
-    if has_images:
-        return []
     elem = _find_body_element(page_elements)
     if elem is None:
         return []
 
-    area_x = _IMG_MARGIN_PT * _PT
-    area_y = _AUTHOR_BAR_PT * _PT
-    area_w = (_SLIDE_W_PT - 2 * _IMG_MARGIN_PT) * _PT
-    area_h = (_SLIDE_H_PT - _AUTHOR_BAR_PT - _IMG_MARGIN_PT) * _PT
+    if has_images:
+        area_x = _IMG_MARGIN_PT * _PT
+        area_y = _AUTHOR_BAR_PT * _PT
+        area_w = (_TEXT_SPLIT_PT - _TEXT_IMG_GAP_PT - _IMG_MARGIN_PT) * _PT
+        area_h = (_SLIDE_H_PT - _AUTHOR_BAR_PT - _IMG_MARGIN_PT) * _PT
+    else:
+        area_x = _IMG_MARGIN_PT * _PT
+        area_y = _AUTHOR_BAR_PT * _PT
+        area_w = (_SLIDE_W_PT - 2 * _IMG_MARGIN_PT) * _PT
+        area_h = (_SLIDE_H_PT - _AUTHOR_BAR_PT - _IMG_MARGIN_PT) * _PT
 
     elem_w = elem["size"]["width"]["magnitude"]
     elem_h = elem["size"]["height"]["magnitude"]
@@ -462,7 +468,7 @@ def _video_requests(
     vid = video_ids[0]
 
     if has_text:
-        area_x = 400
+        area_x = _TEXT_SPLIT_PT
         area_y = _AUTHOR_BAR_PT
         area_w = _SLIDE_W_PT - area_x - _IMG_MARGIN_PT
         area_h = _SLIDE_H_PT - area_y - _IMG_MARGIN_PT
@@ -613,34 +619,33 @@ def build_deck(
             )
         )
 
-        # Post-processing: resize body for text-only, add hyperlinks for URLs.
-        # Both operations require fetching the slide, so they share the fetch.
+        # Post-processing: resize body text box and add hyperlinks for URLs.
+        # The body is always resized: constrained to the left when media is
+        # present, or expanded to fill the slide when text-only.
         has_media = bool(image_urls) or bool(youtube_ids)
         has_urls = bool(_URL_RE.search(body_text))
-        if not has_media or has_urls:
-            new_pres = execute_with_retry(
-                slides_svc.presentations().get(presentationId=pres_id)
-            )
-            new_slide = next(
-                s for s in new_pres["slides"] if s["objectId"] == new_slide_id
-            )
-            page_elements = new_slide.get("pageElements", [])
-            post_reqs: list[dict] = []
-            if not has_media:
-                post_reqs.extend(_body_resize_requests(page_elements, False))
-            if has_urls:
-                body_elem = _find_body_element(page_elements)
-                if body_elem:
-                    post_reqs.extend(
-                        _hyperlink_requests(body_elem["objectId"], body_text)
-                    )
-            if post_reqs:
-                execute_with_retry(
-                    slides_svc.presentations().batchUpdate(
-                        presentationId=pres_id,
-                        body={"requests": post_reqs},
-                    )
+        new_pres = execute_with_retry(
+            slides_svc.presentations().get(presentationId=pres_id)
+        )
+        new_slide = next(
+            s for s in new_pres["slides"] if s["objectId"] == new_slide_id
+        )
+        page_elements = new_slide.get("pageElements", [])
+        post_reqs: list[dict] = []
+        post_reqs.extend(_body_resize_requests(page_elements, has_media))
+        if has_urls:
+            body_elem = _find_body_element(page_elements)
+            if body_elem:
+                post_reqs.extend(
+                    _hyperlink_requests(body_elem["objectId"], body_text)
                 )
+        if post_reqs:
+            execute_with_retry(
+                slides_svc.presentations().batchUpdate(
+                    presentationId=pres_id,
+                    body={"requests": post_reqs},
+                )
+            )
 
         # Insert images
         if image_urls:

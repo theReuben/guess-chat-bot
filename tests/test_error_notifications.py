@@ -68,6 +68,17 @@ class TestBuildDeckReturnsErrors:
                         }
                     ],
                 },
+                {
+                    "objectId": "new1",
+                    "pageElements": [
+                        {
+                            "objectId": "body1",
+                            "shape": {"shapeType": "TEXT_BOX"},
+                            "size": {"width": {"magnitude": 400 * 12700}, "height": {"magnitude": 314 * 12700}},
+                            "transform": {"translateX": 0, "translateY": 55 * 12700},
+                        }
+                    ],
+                },
                 {"objectId": "end", "pageElements": []},
             ]
         }

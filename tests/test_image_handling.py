@@ -19,6 +19,8 @@ from weekly_slides_bot import (
     _PT,
     _SLIDE_H_PT,
     _SLIDE_W_PT,
+    _TEXT_IMG_GAP_PT,
+    _TEXT_SPLIT_PT,
     _body_resize_requests,
     _image_requests,
     generate_slides,
@@ -55,11 +57,11 @@ class TestImageRequestsHasText:
         assert len(_image_requests(_SLIDE_ID, _URLS + ["extra"], has_text=True)) == 4
 
     def test_images_start_in_right_half(self):
-        """All images must start at or past the text/image split (400pt)."""
+        """All images must start at or past the text/image split."""
         for req in self._reqs(4):
             props = req["createImage"]["elementProperties"]
             translate_x_pt = props["transform"]["translateX"] // _PT
-            assert translate_x_pt >= 400, f"translateX {translate_x_pt}pt is in the text area"
+            assert translate_x_pt >= _TEXT_SPLIT_PT, f"translateX {translate_x_pt}pt is in the text area"
 
     def test_images_stay_within_slide_width(self):
         """Right edge of every image must not exceed slide width."""
@@ -135,13 +137,13 @@ class TestImageRequestsNoText:
 
 
 class TestNoImagesDoesNotOverlapText:
-    """With images present, no image should overlap the text area (x < 400pt)."""
+    """With images present, no image should overlap the text area (x < split)."""
 
     def test_images_do_not_invade_text_area_with_text(self):
         reqs = _image_requests(_SLIDE_ID, _URLS[:4], has_text=True)
         for req in reqs:
             left_pt = req["createImage"]["elementProperties"]["transform"]["translateX"] // _PT
-            assert left_pt >= 400
+            assert left_pt >= _TEXT_SPLIT_PT
 
 
 class TestImageOnlySubmissionBody:
@@ -252,7 +254,7 @@ class TestImageOnlySubmissionBody:
 
 
 class TestBodyResizeRequests:
-    """_body_resize_requests must expand the body text box for text-only submissions."""
+    """_body_resize_requests must resize the body text box for all submissions."""
 
     # Simulate a template-style slide with an author bar and a body text box.
     # Author bar: y=0, height=55pt; body box: y=55pt, occupying the left 400pt.
@@ -289,8 +291,9 @@ class TestBodyResizeRequests:
         },
     ]
 
-    def test_returns_empty_when_has_images(self):
-        assert _body_resize_requests(self._ELEMS, has_images=True) == []
+    def test_returns_resize_when_has_images(self):
+        reqs = _body_resize_requests(self._ELEMS, has_images=True)
+        assert len(reqs) == 1
 
     def test_returns_empty_for_no_elements(self):
         assert _body_resize_requests([], has_images=False) == []
@@ -336,3 +339,24 @@ class TestBodyResizeRequests:
         rendered_w = elem_w * transform["scaleX"]
         original_text_area_w = 400 * _PT  # typical left-half text area
         assert rendered_w > original_text_area_w
+
+    def test_with_images_constrains_body_to_left(self):
+        """When images are present, body must be constrained to the left portion."""
+        transform = _body_resize_requests(self._ELEMS, has_images=True)[0][
+            "updatePageElementTransform"
+        ]["transform"]
+        elem_w = 400 * _PT
+        rendered_w = elem_w * transform["scaleX"]
+        max_text_w = (_TEXT_SPLIT_PT - _TEXT_IMG_GAP_PT - _IMG_MARGIN_PT) * _PT
+        assert rendered_w == pytest.approx(max_text_w)
+
+    def test_with_images_body_does_not_overlap_image_area(self):
+        """Body right edge must not reach the image split point."""
+        transform = _body_resize_requests(self._ELEMS, has_images=True)[0][
+            "updatePageElementTransform"
+        ]["transform"]
+        elem_w = 400 * _PT
+        rendered_w = elem_w * transform["scaleX"]
+        left = transform["translateX"]
+        right_edge_pt = (left + rendered_w) / _PT
+        assert right_edge_pt <= _TEXT_SPLIT_PT - _TEXT_IMG_GAP_PT

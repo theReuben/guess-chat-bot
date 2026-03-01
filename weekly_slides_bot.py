@@ -497,7 +497,7 @@ def build_deck(
 
         # Insert images
         if image_urls:
-            # Slide number after template deletion: template_index + i + 1 (1-indexed)
+            # Final slide number (1-indexed) once the template slide is removed
             err_meta = {
                 "slide_number": template_index + i + 1,
                 "slide_id": new_slide_id,
@@ -872,17 +872,20 @@ async def generate_slides(client: discord.Client) -> None:
         print("[info] Posted results message.")
 
         # Send error notifications for processing issues
-        guild_id = channel.guild.id if channel.guild else 0
+        guild_id = channel.guild.id if channel.guild else None
         for err in errors:
             s_url = slide_url(named_pres_id, err.get("slide_id", ""))
             s_num = err.get("slide_number", "?")
             m_id = err.get("message_id", "")
-            m_url = discord_message_url(guild_id, DISCORD_CHANNEL_ID, m_id)
-            await results_channel.send(
-                f"⚠️ **Processing issue for {err['author']}** "
-                f"on [slide {s_num}]({s_url}) "
-                f"([message]({m_url})): {err['issue']}"
-            )
+            parts = [
+                f"⚠️ **Processing issue for {err['author']}**",
+                f"on [slide {s_num}]({s_url})",
+            ]
+            if guild_id is not None and m_id:
+                m_url = discord_message_url(guild_id, DISCORD_CHANNEL_ID, m_id)
+                parts.append(f"([message]({m_url}))")
+            parts.append(f": {err['issue']}")
+            await results_channel.send(" ".join(parts))
         if errors:
             print(f"[info] Sent {len(errors)} error notification(s).")
 

@@ -93,3 +93,50 @@ class TestBlockingCallsOffloaded:
             "build_deck",
             "save_state",
         ]
+
+    @pytest.mark.asyncio
+    @patch("weekly_slides_bot.asyncio.to_thread", new_callable=AsyncMock)
+    @patch("weekly_slides_bot.asyncio.sleep", new_callable=AsyncMock)
+    @patch("weekly_slides_bot.load_state", return_value={
+        "marker_id": "100",
+        "named_pres_id": "existing_named",
+        "anon_pres_id": "existing_anon",
+        "processed_ids": [],
+    })
+    async def test_append_path_uses_to_thread(self, _load, _sleep, mock_to_thread):
+        """Existing-round append path must also use asyncio.to_thread."""
+        mock_slides_svc = MagicMock()
+        mock_drive_svc = MagicMock()
+
+        mock_to_thread.side_effect = [
+            (mock_slides_svc, mock_drive_svc),  # get_google_services
+            None,  # append_slides (named)
+            None,  # append_slides (anon)
+            None,  # save_state
+        ]
+
+        marker_msg = MagicMock()
+        marker_msg.id = 100  # same marker_id as state
+        marker_msg.content = "GUESS CHAT Test Topic"
+
+        sub_msg = MagicMock()
+        sub_msg.id = 300
+        sub_msg.content = "SUBMISSION New answer"
+        sub_msg.attachments = []
+        sub_msg.author = MagicMock()
+        sub_msg.author.id = 999
+        sub_msg.author.display_name = "User"
+        sub_msg.guild = MagicMock()
+        sub_msg.guild.get_member.return_value = MagicMock(display_name="User")
+
+        mock_client = self._make_client(marker_msg, sub_msg)
+        await generate_slides(mock_client)
+
+        assert mock_to_thread.await_count == 4
+        called_funcs = [c.args[0].__name__ for c in mock_to_thread.call_args_list]
+        assert called_funcs == [
+            "get_google_services",
+            "append_slides",
+            "append_slides",
+            "save_state",
+        ]

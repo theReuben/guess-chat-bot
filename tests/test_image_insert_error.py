@@ -90,7 +90,7 @@ class TestBuildDeckImageInsertionError:
             req = MagicMock()
 
             def execute():
-                if call_count["n"] in (4, 5):
+                if call_count["n"] in (5, 6):
                     raise error
                 return {
                     "replies": [{"duplicateObject": {"objectId": "new_slide_1"}}]
@@ -121,6 +121,20 @@ class TestBuildDeckImageInsertionError:
                                 "height": {"magnitude": 55 * 12700},
                             },
                             "transform": {"translateX": 0, "translateY": 0},
+                        }
+                    ],
+                },
+                {
+                    "objectId": "new_slide_1",
+                    "pageElements": [
+                        {
+                            "objectId": "body_elem",
+                            "shape": {"shapeType": "TEXT_BOX"},
+                            "size": {
+                                "width": {"magnitude": 400 * 12700},
+                                "height": {"magnitude": 314 * 12700},
+                            },
+                            "transform": {"translateX": 0, "translateY": 55 * 12700},
                         }
                     ],
                 },
@@ -155,15 +169,11 @@ class TestBuildDeckImageInsertionError:
         def batch_side_effect(*args, **kwargs):
             call_count["n"] += 1
             # Fail on a later call (image insertion), succeed on others
-            # The image insertion call includes createImage requests
+            # Call sequence: title text, dup, position+text, body resize, image
             req = MagicMock()
 
             def execute():
-                # Check if this is the image insertion call by inspecting
-                # whether we've gotten past the initial calls
-                # For simplicity, raise on the 4th batchUpdate call
-                # (title text, dup, position+text, image)
-                if call_count["n"] == 4:
+                if call_count["n"] == 5:
                     raise error
                 return {
                     "replies": [{"duplicateObject": {"objectId": "new_slide_1"}}]
@@ -194,6 +204,20 @@ class TestBuildDeckImageInsertionError:
                                 "height": {"magnitude": 55 * 12700},
                             },
                             "transform": {"translateX": 0, "translateY": 0},
+                        }
+                    ],
+                },
+                {
+                    "objectId": "new_slide_1",
+                    "pageElements": [
+                        {
+                            "objectId": "body_elem",
+                            "shape": {"shapeType": "TEXT_BOX"},
+                            "size": {
+                                "width": {"magnitude": 400 * 12700},
+                                "height": {"magnitude": 314 * 12700},
+                            },
+                            "transform": {"translateX": 0, "translateY": 55 * 12700},
                         }
                     ],
                 },

@@ -19,6 +19,7 @@ from weekly_slides_bot import (
     _PT,
     _SLIDE_H_PT,
     _SLIDE_W_PT,
+    _TEXT_SPLIT_PT,
     _video_requests,
     extract_youtube_ids,
     generate_slides,
@@ -127,7 +128,7 @@ class TestVideoRequestsHasText:
     def test_video_starts_in_right_half(self):
         props = self._reqs()[0]["createVideo"]["elementProperties"]
         translate_x_pt = props["transform"]["translateX"] // _PT
-        assert translate_x_pt >= 400
+        assert translate_x_pt >= _TEXT_SPLIT_PT
 
     def test_video_within_slide_width(self):
         props = self._reqs()[0]["createVideo"]["elementProperties"]

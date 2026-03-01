@@ -15,7 +15,9 @@ import asyncio
 import io
 import json
 import os
+import random
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +25,7 @@ import discord
 import requests
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseUpload
 
 # ---------------------------------------------------------------------------
@@ -57,6 +60,34 @@ def save_state(state: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Google API retry helper
+# ---------------------------------------------------------------------------
+
+_RETRYABLE_STATUS_CODES = (429, 500, 502, 503)
+
+
+def execute_with_retry(request, max_retries: int = 5) -> Any:
+    """Execute a Google API request with exponential backoff on transient errors."""
+    for attempt in range(max_retries + 1):
+        try:
+            return request.execute()
+        except HttpError as exc:
+            status = exc.resp.status
+            retryable = status in _RETRYABLE_STATUS_CODES or (
+                status == 403 and "rateLimitExceeded" in str(exc)
+            )
+            if retryable and attempt < max_retries:
+                wait = (2 ** attempt) + random.random()
+                print(
+                    f"[warn] Google API error (HTTP {status}); "
+                    f"retrying in {wait:.1f}s (attempt {attempt + 1}/{max_retries})"
+                )
+                time.sleep(wait)
+            else:
+                raise
+
+
+# ---------------------------------------------------------------------------
 # Google API helpers
 # ---------------------------------------------------------------------------
 
@@ -81,23 +112,25 @@ def copy_presentation(drive_svc, title: str) -> str:
     body: dict[str, Any] = {"name": title}
     if DRIVE_FOLDER_ID:
         body["parents"] = [DRIVE_FOLDER_ID]
-    result = drive_svc.files().copy(fileId=TEMPLATE_DECK_ID, body=body).execute()
+    result = execute_with_retry(drive_svc.files().copy(fileId=TEMPLATE_DECK_ID, body=body))
     return result["id"]
 
 
 def share_presentation(drive_svc, file_id: str) -> None:
     """Share presentation as anyone-with-link viewer."""
-    drive_svc.permissions().create(
-        fileId=file_id,
-        body={"type": "anyone", "role": "reader"},
-        fields="id",
-    ).execute()
+    execute_with_retry(
+        drive_svc.permissions().create(
+            fileId=file_id,
+            body={"type": "anyone", "role": "reader"},
+            fields="id",
+        )
+    )
 
 
 def delete_drive_file(drive_svc, file_id: str) -> None:
     """Delete a file from Google Drive. Silently ignores missing files."""
     try:
-        drive_svc.files().delete(fileId=file_id).execute()
+        execute_with_retry(drive_svc.files().delete(fileId=file_id))
         print(f"[info] Deleted old file {file_id} from Drive.")
     except Exception as exc:  # noqa: BLE001
         print(f"[warn] Could not delete file {file_id}: {exc}")
@@ -129,19 +162,19 @@ def upload_image_to_drive(drive_svc, url: str, cache: dict[str, str]) -> str | N
     meta: dict[str, Any] = {"name": "submission_image"}
     if DRIVE_FOLDER_ID:
         meta["parents"] = [DRIVE_FOLDER_ID]
-    file_obj = (
-        drive_svc.files()
-        .create(body=meta, media_body=media, fields="id")
-        .execute()
+    file_obj = execute_with_retry(
+        drive_svc.files().create(body=meta, media_body=media, fields="id")
     )
     file_id = file_obj["id"]
 
     # Make the file publicly readable so Slides API can fetch it
-    drive_svc.permissions().create(
-        fileId=file_id,
-        body={"type": "anyone", "role": "reader"},
-        fields="id",
-    ).execute()
+    execute_with_retry(
+        drive_svc.permissions().create(
+            fileId=file_id,
+            body={"type": "anyone", "role": "reader"},
+            fields="id",
+        )
+    )
 
     public_url = f"https://drive.google.com/uc?id={file_id}&export=download"
     cache[url] = public_url
@@ -283,13 +316,13 @@ def _body_resize_requests(page_elements: list[dict], has_images: bool) -> list[d
 
 
 def _get_slide_ids(slides_svc, pres_id: str) -> list[str]:
-    pres = slides_svc.presentations().get(presentationId=pres_id).execute()
+    pres = execute_with_retry(slides_svc.presentations().get(presentationId=pres_id))
     return [s["objectId"] for s in pres.get("slides", [])]
 
 
 def _find_template_slide_id(slides_svc, pres_id: str) -> str:
     """Return the objectId of the slide that contains {{AUTHOR}}."""
-    pres = slides_svc.presentations().get(presentationId=pres_id).execute()
+    pres = execute_with_retry(slides_svc.presentations().get(presentationId=pres_id))
     for slide in pres.get("slides", []):
         for elem in slide.get("pageElements", []):
             shape = elem.get("shape", {})
@@ -314,20 +347,22 @@ def build_deck(
     # --- Replace {{TOPIC}} on title slide ---
     slide_ids = _get_slide_ids(slides_svc, pres_id)
     title_slide_id = slide_ids[0]
-    slides_svc.presentations().batchUpdate(
-        presentationId=pres_id,
-        body={
-            "requests": [
-                {
-                    "replaceAllText": {
-                        "containsText": {"text": "{{TOPIC}}"},
-                        "replaceText": topic,
-                        "pageObjectIds": [title_slide_id],
+    execute_with_retry(
+        slides_svc.presentations().batchUpdate(
+            presentationId=pres_id,
+            body={
+                "requests": [
+                    {
+                        "replaceAllText": {
+                            "containsText": {"text": "{{TOPIC}}"},
+                            "replaceText": topic,
+                            "pageObjectIds": [title_slide_id],
+                        }
                     }
-                }
-            ]
-        },
-    ).execute()
+                ]
+            },
+        )
+    )
 
     template_slide_id = _find_template_slide_id(slides_svc, pres_id)
 
@@ -342,9 +377,8 @@ def build_deck(
         image_urls = sub.get("images", [])
 
         # Duplicate the template slide
-        dup_resp = (
-            slides_svc.presentations()
-            .batchUpdate(
+        dup_resp = execute_with_retry(
+            slides_svc.presentations().batchUpdate(
                 presentationId=pres_id,
                 body={
                     "requests": [
@@ -352,29 +386,19 @@ def build_deck(
                     ]
                 },
             )
-            .execute()
         )
         new_slide_id = dup_resp["replies"][0]["duplicateObject"]["objectId"]
 
-        # Move the new slide to position right after the template
+        # Move the new slide and replace placeholders in a single batch
         target_index = template_index + i + 1
-        slides_svc.presentations().batchUpdate(
-            presentationId=pres_id,
-            body={
-                "requests": [
-                    {
-                        "updateSlidesPosition": {
-                            "slideObjectIds": [new_slide_id],
-                            "insertionIndex": target_index,
-                        }
-                    }
-                ]
-            },
-        ).execute()
-
-        # Replace placeholders on the new slide
         author_text = f"Answer: {author}" if named else "Answer:"
-        text_requests = [
+        batch_requests: list[dict] = [
+            {
+                "updateSlidesPosition": {
+                    "slideObjectIds": [new_slide_id],
+                    "insertionIndex": target_index,
+                }
+            },
             {
                 "replaceAllText": {
                     "containsText": {"text": "{{AUTHOR}}"},
@@ -390,23 +414,29 @@ def build_deck(
                 }
             },
         ]
-        slides_svc.presentations().batchUpdate(
-            presentationId=pres_id,
-            body={"requests": text_requests},
-        ).execute()
+        execute_with_retry(
+            slides_svc.presentations().batchUpdate(
+                presentationId=pres_id,
+                body={"requests": batch_requests},
+            )
+        )
 
         # Resize body text box for text-only submissions
         if not image_urls:
-            new_pres = slides_svc.presentations().get(presentationId=pres_id).execute()
+            new_pres = execute_with_retry(
+                slides_svc.presentations().get(presentationId=pres_id)
+            )
             new_slide = next(
                 s for s in new_pres["slides"] if s["objectId"] == new_slide_id
             )
             resize_reqs = _body_resize_requests(new_slide.get("pageElements", []), False)
             if resize_reqs:
-                slides_svc.presentations().batchUpdate(
-                    presentationId=pres_id,
-                    body={"requests": resize_reqs},
-                ).execute()
+                execute_with_retry(
+                    slides_svc.presentations().batchUpdate(
+                        presentationId=pres_id,
+                        body={"requests": resize_reqs},
+                    )
+                )
 
         # Insert images
         if image_urls:
@@ -416,18 +446,22 @@ def build_deck(
             ]
             drive_urls = [u for u in drive_urls if u]
             if drive_urls:
-                slides_svc.presentations().batchUpdate(
-                    presentationId=pres_id,
-                    body={"requests": _image_requests(new_slide_id, drive_urls, has_text=bool(body_text))},
-                ).execute()
+                execute_with_retry(
+                    slides_svc.presentations().batchUpdate(
+                        presentationId=pres_id,
+                        body={"requests": _image_requests(new_slide_id, drive_urls, has_text=bool(body_text))},
+                    )
+                )
 
     # Delete the original template slide
-    slides_svc.presentations().batchUpdate(
-        presentationId=pres_id,
-        body={
-            "requests": [{"deleteObject": {"objectId": template_slide_id}}]
-        },
-    ).execute()
+    execute_with_retry(
+        slides_svc.presentations().batchUpdate(
+            presentationId=pres_id,
+            body={
+                "requests": [{"deleteObject": {"objectId": template_slide_id}}]
+            },
+        )
+    )
 
 
 def append_slides(
@@ -439,7 +473,9 @@ def append_slides(
     image_cache: dict[str, str],
 ) -> None:
     """Append slides for new submissions to an existing deck."""
-    pres = slides_svc.presentations().get(presentationId=pres_id).execute()
+    pres = execute_with_retry(
+        slides_svc.presentations().get(presentationId=pres_id)
+    )
     slides = pres.get("slides", [])
 
     # Find the last submission slide (slide before the end slide)
@@ -459,9 +495,8 @@ def append_slides(
         image_urls = sub.get("images", [])
 
         # Duplicate an existing submission slide
-        dup_resp = (
-            slides_svc.presentations()
-            .batchUpdate(
+        dup_resp = execute_with_retry(
+            slides_svc.presentations().batchUpdate(
                 presentationId=pres_id,
                 body={
                     "requests": [
@@ -469,29 +504,30 @@ def append_slides(
                     ]
                 },
             )
-            .execute()
         )
         new_slide_id = dup_resp["replies"][0]["duplicateObject"]["objectId"]
 
         # Move before the end slide
-        slides_svc.presentations().batchUpdate(
-            presentationId=pres_id,
-            body={
-                "requests": [
-                    {
-                        "updateSlidesPosition": {
-                            "slideObjectIds": [new_slide_id],
-                            "insertionIndex": insert_before_index + i,
+        execute_with_retry(
+            slides_svc.presentations().batchUpdate(
+                presentationId=pres_id,
+                body={
+                    "requests": [
+                        {
+                            "updateSlidesPosition": {
+                                "slideObjectIds": [new_slide_id],
+                                "insertionIndex": insert_before_index + i,
+                            }
                         }
-                    }
-                ]
-            },
-        ).execute()
+                    ]
+                },
+            )
+        )
 
         # Clear existing text elements and replace with new content
         # Get current text in the slide shape elements
-        new_pres = (
-            slides_svc.presentations().get(presentationId=pres_id).execute()
+        new_pres = execute_with_retry(
+            slides_svc.presentations().get(presentationId=pres_id)
         )
         new_slide = next(
             s for s in new_pres["slides"] if s["objectId"] == new_slide_id
@@ -519,10 +555,12 @@ def append_slides(
         )
         all_clear_reqs = clear_requests + resize_reqs
         if all_clear_reqs:
-            slides_svc.presentations().batchUpdate(
-                presentationId=pres_id,
-                body={"requests": all_clear_reqs},
-            ).execute()
+            execute_with_retry(
+                slides_svc.presentations().batchUpdate(
+                    presentationId=pres_id,
+                    body={"requests": all_clear_reqs},
+                )
+            )
 
         # Set new text
         author_text = f"Answer: {author}" if named else "Answer:"
@@ -542,10 +580,12 @@ def append_slides(
                 }
             },
         ]
-        slides_svc.presentations().batchUpdate(
-            presentationId=pres_id,
-            body={"requests": text_requests},
-        ).execute()
+        execute_with_retry(
+            slides_svc.presentations().batchUpdate(
+                presentationId=pres_id,
+                body={"requests": text_requests},
+            )
+        )
 
         # Insert images
         if image_urls:
@@ -555,10 +595,12 @@ def append_slides(
             ]
             drive_urls = [u for u in drive_urls if u]
             if drive_urls:
-                slides_svc.presentations().batchUpdate(
-                    presentationId=pres_id,
-                    body={"requests": _image_requests(new_slide_id, drive_urls, has_text=bool(body_text))},
-                ).execute()
+                execute_with_retry(
+                    slides_svc.presentations().batchUpdate(
+                        presentationId=pres_id,
+                        body={"requests": _image_requests(new_slide_id, drive_urls, has_text=bool(body_text))},
+                    )
+                )
 
 
 # ---------------------------------------------------------------------------

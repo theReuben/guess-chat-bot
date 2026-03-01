@@ -453,12 +453,15 @@ def build_deck(
             ]
             drive_urls = [u for u in drive_urls if u]
             if drive_urls:
-                execute_with_retry(
-                    slides_svc.presentations().batchUpdate(
-                        presentationId=pres_id,
-                        body={"requests": _image_requests(new_slide_id, drive_urls, has_text=bool(body_text))},
+                try:
+                    execute_with_retry(
+                        slides_svc.presentations().batchUpdate(
+                            presentationId=pres_id,
+                            body={"requests": _image_requests(new_slide_id, drive_urls, has_text=bool(body_text))},
+                        )
                     )
-                )
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[warn] Could not insert images for '{author}': {exc}")
 
     # Delete the original template slide
     execute_with_retry(
@@ -602,12 +605,15 @@ def append_slides(
             ]
             drive_urls = [u for u in drive_urls if u]
             if drive_urls:
-                execute_with_retry(
-                    slides_svc.presentations().batchUpdate(
-                        presentationId=pres_id,
-                        body={"requests": _image_requests(new_slide_id, drive_urls, has_text=bool(body_text))},
+                try:
+                    execute_with_retry(
+                        slides_svc.presentations().batchUpdate(
+                            presentationId=pres_id,
+                            body={"requests": _image_requests(new_slide_id, drive_urls, has_text=bool(body_text))},
+                        )
                     )
-                )
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[warn] Could not insert images for '{author}': {exc}")
 
 
 # ---------------------------------------------------------------------------

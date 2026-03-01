@@ -49,6 +49,8 @@ SUBMISSION_PREFIX = "SUBMISSION"
 _MD_PREFIX_RE = re.compile(r"^[#*_ \t]+")
 _MARKER_LINE_RE = re.compile(r"^[#*_ \t]*(GUESS\s+CHAT)\b\s*(.*)", re.IGNORECASE)
 _SUBMISSION_RE = re.compile(r"^[#*_ \t]*(SUBMISSION)\b[*_]*\s*(.*)", re.IGNORECASE | re.DOTALL)
+_URL_RE = re.compile(r"https?://[^\s<>\"]+")
+
 
 # ---------------------------------------------------------------------------
 # State helpers
@@ -145,6 +147,16 @@ def delete_drive_file(drive_svc, file_id: str) -> None:
 
 def presentation_url(pres_id: str) -> str:
     return f"https://docs.google.com/presentation/d/{pres_id}/edit?usp=sharing"
+
+
+def slide_url(pres_id: str, slide_id: str) -> str:
+    """Return a direct URL to a specific slide in a Google Slides presentation."""
+    return f"https://docs.google.com/presentation/d/{pres_id}/edit#slide=id.{slide_id}"
+
+
+def discord_message_url(guild_id: int, channel_id: int, message_id: str) -> str:
+    """Return a direct URL to a Discord message."""
+    return f"https://discord.com/channels/{guild_id}/{channel_id}/{message_id}"
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +329,28 @@ def _body_resize_requests(page_elements: list[dict], has_images: bool) -> list[d
     ]
 
 
+def _hyperlink_requests(element_id: str, body_text: str) -> list[dict]:
+    """Return updateTextStyle requests to make URLs in *body_text* clickable hyperlinks."""
+    reqs: list[dict] = []
+    for m in _URL_RE.finditer(body_text):
+        url = m.group(0)
+        reqs.append(
+            {
+                "updateTextStyle": {
+                    "objectId": element_id,
+                    "textRange": {
+                        "type": "FIXED_RANGE",
+                        "startIndex": m.start(),
+                        "endIndex": m.end(),
+                    },
+                    "style": {"link": {"url": url}},
+                    "fields": "link",
+                }
+            }
+        )
+    return reqs
+
+
 # ---------------------------------------------------------------------------
 # Slides building
 # ---------------------------------------------------------------------------
@@ -348,8 +382,13 @@ def build_deck(
     submissions: list[dict],
     named: bool,
     image_cache: dict[str, str],
-) -> None:
-    """Populate a freshly copied presentation with submission slides."""
+) -> list[dict]:
+    """Populate a freshly copied presentation with submission slides.
+
+    Returns a list of error dicts (``{"author": ..., "issue": ...}``) for any
+    processing problems encountered (e.g. failed image uploads).
+    """
+    errors: list[dict] = []
 
     # --- Replace {{TOPIC}} on title slide ---
     slide_ids = _get_slide_ids(slides_svc, pres_id)
@@ -428,30 +467,54 @@ def build_deck(
             )
         )
 
-        # Resize body text box for text-only submissions
-        if not image_urls:
+        # Post-processing: resize body for text-only, add hyperlinks for URLs.
+        # Both operations require fetching the slide, so they share the fetch.
+        has_urls = bool(_URL_RE.search(body_text))
+        if not image_urls or has_urls:
             new_pres = execute_with_retry(
                 slides_svc.presentations().get(presentationId=pres_id)
             )
             new_slide = next(
                 s for s in new_pres["slides"] if s["objectId"] == new_slide_id
             )
-            resize_reqs = _body_resize_requests(new_slide.get("pageElements", []), False)
-            if resize_reqs:
+            page_elements = new_slide.get("pageElements", [])
+            post_reqs: list[dict] = []
+            if not image_urls:
+                post_reqs.extend(_body_resize_requests(page_elements, False))
+            if has_urls:
+                body_elem = _find_body_element(page_elements)
+                if body_elem:
+                    post_reqs.extend(
+                        _hyperlink_requests(body_elem["objectId"], body_text)
+                    )
+            if post_reqs:
                 execute_with_retry(
                     slides_svc.presentations().batchUpdate(
                         presentationId=pres_id,
-                        body={"requests": resize_reqs},
+                        body={"requests": post_reqs},
                     )
                 )
 
         # Insert images
         if image_urls:
-            drive_urls = [
+            # Final slide number (1-indexed) once the template slide is removed
+            err_meta = {
+                "slide_number": template_index + i + 1,
+                "slide_id": new_slide_id,
+                "message_id": sub.get("id", ""),
+            }
+            drive_urls_raw = [
                 upload_image_to_drive(drive_svc, u, image_cache)
                 for u in image_urls[:4]
             ]
-            drive_urls = [u for u in drive_urls if u]
+            failed_uploads = sum(1 for u in drive_urls_raw if u is None)
+            if failed_uploads:
+                errors.append({
+                    "author": author,
+                    "issue": f"Failed to upload {failed_uploads} image(s) to Google Drive",
+                    **err_meta,
+                })
+            drive_urls = [u for u in drive_urls_raw if u]
             if drive_urls:
                 try:
                     execute_with_retry(
@@ -462,6 +525,11 @@ def build_deck(
                     )
                 except Exception as exc:  # noqa: BLE001
                     print(f"[warn] Could not insert images for '{author}': {exc}")
+                    errors.append({
+                        "author": author,
+                        "issue": f"Could not insert image(s) into slide: {exc}",
+                        **err_meta,
+                    })
 
     # Delete the original template slide
     execute_with_retry(
@@ -473,6 +541,8 @@ def build_deck(
         )
     )
 
+    return errors
+
 
 def append_slides(
     slides_svc,
@@ -481,8 +551,13 @@ def append_slides(
     new_submissions: list[dict],
     named: bool,
     image_cache: dict[str, str],
-) -> None:
-    """Append slides for new submissions to an existing deck."""
+) -> list[dict]:
+    """Append slides for new submissions to an existing deck.
+
+    Returns a list of error dicts (``{"author": ..., "issue": ...}``) for any
+    processing problems encountered (e.g. failed image uploads).
+    """
+    errors: list[dict] = []
     pres = execute_with_retry(
         slides_svc.presentations().get(presentationId=pres_id)
     )
@@ -492,7 +567,7 @@ def append_slides(
     # The end slide is the last slide; submission slides are everything in between
     if len(slides) < 2:
         print("[warn] existing deck has fewer slides than expected; skipping append")
-        return
+        return errors
 
     # Use the second-to-last slide as the duplication source
     source_slide_id = slides[-2]["objectId"]
@@ -599,11 +674,23 @@ def append_slides(
 
         # Insert images
         if image_urls:
-            drive_urls = [
+            err_meta = {
+                "slide_number": insert_before_index + i + 1,  # 1-indexed
+                "slide_id": new_slide_id,
+                "message_id": sub.get("id", ""),
+            }
+            drive_urls_raw = [
                 upload_image_to_drive(drive_svc, u, image_cache)
                 for u in image_urls[:4]
             ]
-            drive_urls = [u for u in drive_urls if u]
+            failed_uploads = sum(1 for u in drive_urls_raw if u is None)
+            if failed_uploads:
+                errors.append({
+                    "author": author,
+                    "issue": f"Failed to upload {failed_uploads} image(s) to Google Drive",
+                    **err_meta,
+                })
+            drive_urls = [u for u in drive_urls_raw if u]
             if drive_urls:
                 try:
                     execute_with_retry(
@@ -614,6 +701,13 @@ def append_slides(
                     )
                 except Exception as exc:  # noqa: BLE001
                     print(f"[warn] Could not insert images for '{author}': {exc}")
+                    errors.append({
+                        "author": author,
+                        "issue": f"Could not insert image(s) into slide: {exc}",
+                        **err_meta,
+                    })
+
+    return errors
 
 
 # ---------------------------------------------------------------------------
@@ -755,11 +849,11 @@ async def generate_slides(client: discord.Client) -> None:
 
     if new_round:
         print(f"[info] Building decks for {len(all_submissions)} submission(s).")
-        await asyncio.to_thread(build_deck, slides_svc, drive_svc, named_pres_id, topic, all_submissions, named=True, image_cache=image_cache)
+        errors = await asyncio.to_thread(build_deck, slides_svc, drive_svc, named_pres_id, topic, all_submissions, named=True, image_cache=image_cache)
         await asyncio.to_thread(build_deck, slides_svc, drive_svc, anon_pres_id, topic, all_submissions, named=False, image_cache=image_cache)
     else:
         print(f"[info] Appending {len(new_submissions)} new submission(s) to existing decks.")
-        await asyncio.to_thread(append_slides, slides_svc, drive_svc, named_pres_id, new_submissions, named=True, image_cache=image_cache)
+        errors = await asyncio.to_thread(append_slides, slides_svc, drive_svc, named_pres_id, new_submissions, named=True, image_cache=image_cache)
         await asyncio.to_thread(append_slides, slides_svc, drive_svc, anon_pres_id, new_submissions, named=False, image_cache=image_cache)
 
     # Update processed IDs
@@ -776,6 +870,24 @@ async def generate_slides(client: discord.Client) -> None:
         msg_text = format_results_message(topic, all_submissions, named_url, anon_url)
         await results_channel.send(msg_text)
         print("[info] Posted results message.")
+
+        # Send error notifications for processing issues
+        guild_id = channel.guild.id if channel.guild else None
+        for err in errors:
+            s_url = slide_url(named_pres_id, err.get("slide_id", ""))
+            s_num = err.get("slide_number", "?")
+            m_id = err.get("message_id", "")
+            parts = [
+                f"⚠️ **Processing issue for {err['author']}**",
+                f"on [slide {s_num}]({s_url})",
+            ]
+            if guild_id is not None and m_id:
+                m_url = discord_message_url(guild_id, DISCORD_CHANNEL_ID, m_id)
+                parts.append(f"([message]({m_url}))")
+            parts.append(f": {err['issue']}")
+            await results_channel.send(" ".join(parts))
+        if errors:
+            print(f"[info] Sent {len(errors)} error notification(s).")
 
     # Persist state
     state = {

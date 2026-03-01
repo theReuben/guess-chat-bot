@@ -58,8 +58,8 @@ class TestBlockingCallsOffloaded:
             "anon_id",    # copy_presentation (anon)
             None,         # share_presentation (named)
             None,         # share_presentation (anon)
-            None,         # build_deck (named)
-            None,         # build_deck (anon)
+            [],           # build_deck (named)
+            [],           # build_deck (anon)
             None,         # save_state
         ]
 
@@ -110,8 +110,8 @@ class TestBlockingCallsOffloaded:
 
         mock_to_thread.side_effect = [
             (mock_slides_svc, mock_drive_svc),  # get_google_services
-            None,  # append_slides (named)
-            None,  # append_slides (anon)
+            [],    # append_slides (named)
+            [],    # append_slides (anon)
             None,  # save_state
         ]
 

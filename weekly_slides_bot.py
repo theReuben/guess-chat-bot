@@ -661,7 +661,7 @@ async def generate_slides(client: discord.Client) -> None:
         seen_authors[sub["author"]] = i
     all_submissions = [all_submissions[i] for i in sorted(seen_authors.values())]
 
-    slides_svc, drive_svc = get_google_services()
+    slides_svc, drive_svc = await asyncio.to_thread(get_google_services)
 
     prev_marker_id = state.get("marker_id")
     named_pres_id = state.get("named_pres_id")
@@ -672,10 +672,10 @@ async def generate_slides(client: discord.Client) -> None:
 
     if new_round:
         print(f"[info] New round detected (marker {marker_id}); creating fresh decks.")
-        named_pres_id = copy_presentation(drive_svc, f"Guess Chat — {topic} (Named)")
-        anon_pres_id = copy_presentation(drive_svc, f"Guess Chat — {topic} (Anonymous)")
-        share_presentation(drive_svc, named_pres_id)
-        share_presentation(drive_svc, anon_pres_id)
+        named_pres_id = await asyncio.to_thread(copy_presentation, drive_svc, f"Guess Chat — {topic} (Named)")
+        anon_pres_id = await asyncio.to_thread(copy_presentation, drive_svc, f"Guess Chat — {topic} (Anonymous)")
+        await asyncio.to_thread(share_presentation, drive_svc, named_pres_id)
+        await asyncio.to_thread(share_presentation, drive_svc, anon_pres_id)
         processed_ids = set()
 
     new_submissions = [s for s in all_submissions if s["id"] not in processed_ids]
@@ -688,12 +688,12 @@ async def generate_slides(client: discord.Client) -> None:
 
     if new_round:
         print(f"[info] Building decks for {len(all_submissions)} submission(s).")
-        build_deck(slides_svc, drive_svc, named_pres_id, topic, all_submissions, named=True, image_cache=image_cache)
-        build_deck(slides_svc, drive_svc, anon_pres_id, topic, all_submissions, named=False, image_cache=image_cache)
+        await asyncio.to_thread(build_deck, slides_svc, drive_svc, named_pres_id, topic, all_submissions, named=True, image_cache=image_cache)
+        await asyncio.to_thread(build_deck, slides_svc, drive_svc, anon_pres_id, topic, all_submissions, named=False, image_cache=image_cache)
     else:
         print(f"[info] Appending {len(new_submissions)} new submission(s) to existing decks.")
-        append_slides(slides_svc, drive_svc, named_pres_id, new_submissions, named=True, image_cache=image_cache)
-        append_slides(slides_svc, drive_svc, anon_pres_id, new_submissions, named=False, image_cache=image_cache)
+        await asyncio.to_thread(append_slides, slides_svc, drive_svc, named_pres_id, new_submissions, named=True, image_cache=image_cache)
+        await asyncio.to_thread(append_slides, slides_svc, drive_svc, anon_pres_id, new_submissions, named=False, image_cache=image_cache)
 
     # Update processed IDs
     for sub in new_submissions:
@@ -718,7 +718,7 @@ async def generate_slides(client: discord.Client) -> None:
         "anon_pres_id": anon_pres_id,
         "processed_ids": list(processed_ids),
     }
-    save_state(state)
+    await asyncio.to_thread(save_state, state)
     print("[info] State saved.")
 
 

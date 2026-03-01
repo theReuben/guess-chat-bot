@@ -45,7 +45,7 @@ class TestFetchMemberPacing:
         return mock_client
 
     @pytest.mark.asyncio
-    @patch("weekly_slides_bot.asyncio")
+    @patch("weekly_slides_bot.asyncio.sleep", new_callable=AsyncMock)
     @patch("weekly_slides_bot.save_state")
     @patch("weekly_slides_bot.build_deck")
     @patch("weekly_slides_bot.share_presentation")
@@ -53,10 +53,9 @@ class TestFetchMemberPacing:
     @patch("weekly_slides_bot.get_google_services", return_value=(MagicMock(), MagicMock()))
     @patch("weekly_slides_bot.load_state", return_value={})
     async def test_sleep_called_after_fetch_member(
-        self, _load, _gcs, _copy, _share, _build, _save, mock_asyncio
+        self, _load, _gcs, _copy, _share, _build, _save, mock_sleep
     ):
         """asyncio.sleep must be called after each fetch_member REST call."""
-        mock_asyncio.sleep = AsyncMock()
 
         marker_msg = MagicMock()
         marker_msg.id = 100
@@ -83,11 +82,11 @@ class TestFetchMemberPacing:
         await generate_slides(mock_client)
 
         # asyncio.sleep should have been called once per unique author
-        assert mock_asyncio.sleep.await_count == 2
-        mock_asyncio.sleep.assert_awaited_with(0.25)
+        assert mock_sleep.await_count == 2
+        mock_sleep.assert_awaited_with(0.25)
 
     @pytest.mark.asyncio
-    @patch("weekly_slides_bot.asyncio")
+    @patch("weekly_slides_bot.asyncio.sleep", new_callable=AsyncMock)
     @patch("weekly_slides_bot.save_state")
     @patch("weekly_slides_bot.build_deck")
     @patch("weekly_slides_bot.share_presentation")
@@ -95,10 +94,9 @@ class TestFetchMemberPacing:
     @patch("weekly_slides_bot.get_google_services", return_value=(MagicMock(), MagicMock()))
     @patch("weekly_slides_bot.load_state", return_value={})
     async def test_no_sleep_for_cached_member(
-        self, _load, _gcs, _copy, _share, _build, _save, mock_asyncio
+        self, _load, _gcs, _copy, _share, _build, _save, mock_sleep
     ):
         """asyncio.sleep must not be called when get_member returns a hit."""
-        mock_asyncio.sleep = AsyncMock()
 
         marker_msg = MagicMock()
         marker_msg.id = 100
@@ -122,11 +120,11 @@ class TestFetchMemberPacing:
         await generate_slides(mock_client)
 
         # No sleep because get_member returned a cached result
-        mock_asyncio.sleep.assert_not_awaited()
+        mock_sleep.assert_not_awaited()
         msg.guild.fetch_member.assert_not_awaited()
 
     @pytest.mark.asyncio
-    @patch("weekly_slides_bot.asyncio")
+    @patch("weekly_slides_bot.asyncio.sleep", new_callable=AsyncMock)
     @patch("weekly_slides_bot.save_state")
     @patch("weekly_slides_bot.build_deck")
     @patch("weekly_slides_bot.share_presentation")
@@ -134,10 +132,9 @@ class TestFetchMemberPacing:
     @patch("weekly_slides_bot.get_google_services", return_value=(MagicMock(), MagicMock()))
     @patch("weekly_slides_bot.load_state", return_value={})
     async def test_sleep_called_once_per_unique_author(
-        self, _load, _gcs, _copy, _share, _build, _save, mock_asyncio
+        self, _load, _gcs, _copy, _share, _build, _save, mock_sleep
     ):
         """Two submissions from the same author should only trigger one fetch_member call."""
-        mock_asyncio.sleep = AsyncMock()
 
         marker_msg = MagicMock()
         marker_msg.id = 100
@@ -165,4 +162,4 @@ class TestFetchMemberPacing:
         await generate_slides(mock_client)
 
         # Only one fetch + sleep because same author is cached after first call
-        assert mock_asyncio.sleep.await_count == 1
+        assert mock_sleep.await_count == 1

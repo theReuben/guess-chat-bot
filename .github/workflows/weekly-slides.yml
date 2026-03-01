@@ -4,6 +4,8 @@ on:
   schedule:
     - cron: '30 10 * * 5'  # 10:30 UTC (= 11:30 BST, summer)
     - cron: '30 11 * * 5'  # 11:30 UTC (= 11:30 GMT, winter)
+    - cron: '0 17 * * 5'   # 17:00 UTC (= 18:00 BST, summer) – announce mode
+    - cron: '0 18 * * 5'   # 18:00 UTC (= 18:00 GMT, winter) – announce mode
   workflow_dispatch:
     inputs:
       force_reset:
@@ -14,6 +16,14 @@ on:
         options:
           - 'false'
           - 'true'
+      bot_mode:
+        description: 'Bot operation mode'
+        required: false
+        default: 'slides'
+        type: choice
+        options:
+          - 'slides'
+          - 'announce'
 
 concurrency:
   group: guess-chat
@@ -26,16 +36,22 @@ jobs:
       contents: write
 
     steps:
-      - name: Check UK time (DST guard)
+      - name: Check UK time (DST guard) and set bot mode
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "Manual trigger — skipping DST time check."
+            MODE="${{ github.event.inputs.bot_mode }}"
+            echo "BOT_MODE=${MODE:-slides}" >> "$GITHUB_ENV"
             exit 0
           fi
           UK_HOUR=$(TZ='Europe/London' date +%H)
           echo "Current UK hour: $UK_HOUR"
-          if [ "$UK_HOUR" != "11" ]; then
-            echo "Not 11 AM UK time — skipping this scheduled run."
+          if [ "$UK_HOUR" = "11" ]; then
+            echo "BOT_MODE=slides" >> "$GITHUB_ENV"
+          elif [ "$UK_HOUR" = "18" ]; then
+            echo "BOT_MODE=announce" >> "$GITHUB_ENV"
+          else
+            echo "Not a valid UK scheduled hour — skipping this run."
             echo "SKIP=true" >> "$GITHUB_ENV"
           fi
 
@@ -80,6 +96,8 @@ jobs:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
           DISCORD_RESULTS_CHANNEL_ID: ${{ secrets.DISCORD_RESULTS_CHANNEL_ID }}
+          DISCORD_MOD_CHANNEL_ID: ${{ secrets.DISCORD_MOD_CHANNEL_ID }}
+          BOT_MODE: ${{ env.BOT_MODE }}
           DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
           TEMPLATE_DECK_ID: ${{ secrets.TEMPLATE_DECK_ID }}
           GOOGLE_CREDS_FILE: service_account.json

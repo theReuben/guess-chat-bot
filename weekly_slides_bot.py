@@ -1092,14 +1092,16 @@ async def generate_slides(client: discord.Client) -> None:
         if errors:
             print(f"[info] Sent {len(errors)} error notification(s).")
 
-    # Persist state
-    state = {
+    # Persist state (preserve keys written by other modes, e.g. last_announced_mod_msg_id)
+    prev_state = load_state()
+    prev_state.update({
         "marker_id": marker_id,
         "topic": topic,
         "named_pres_id": named_pres_id,
         "anon_pres_id": anon_pres_id,
         "processed_ids": list(processed_ids),
-    }
+    })
+    state = prev_state
     await asyncio.to_thread(save_state, state)
     print("[info] State saved.")
 
@@ -1132,10 +1134,22 @@ async def check_mod_and_announce(client: discord.Client) -> None:
     # Search for the most recent GUESS CHAT announcement from a Mod
     announcement_msg = None
     async for msg in mod_channel.history(limit=500):
-        # Only consider messages from members with the Mod role
-        if not isinstance(msg.author, discord.Member):
+        # Only consider messages from members with the Mod role.
+        # msg.author may be a discord.User if the member is not cached; try to resolve it.
+        member: discord.Member | None
+        if isinstance(msg.author, discord.Member):
+            member = msg.author
+        else:
+            if msg.guild is None:
+                continue
+            try:
+                member = await msg.guild.fetch_member(msg.author.id)
+            except (discord.NotFound, discord.HTTPException):
+                member = None
+
+        if member is None:
             continue
-        if not _has_mod_role(msg.author):
+        if not _has_mod_role(member):
             continue
         first_line = msg.content.split("\n", 1)[0]
         if _MARKER_LINE_RE.match(first_line):

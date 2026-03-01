@@ -857,6 +857,29 @@ def format_results_message(
     return "\n".join(lines)
 
 
+def format_error_message(
+    err: dict,
+    pres_id: str,
+    guild_id: int | None,
+    channel_id: int,
+) -> str:
+    """Build a nicely formatted Discord message for a processing error."""
+    s_url = slide_url(pres_id, err.get("slide_id", ""))
+    s_num = err.get("slide_number", "?")
+    m_id = err.get("message_id", "")
+
+    lines = [
+        f"⚠️ **Processing issue for {err['author']}**",
+        err["issue"],
+    ]
+    links: list[str] = [f"[slide {s_num}]({s_url})"]
+    if guild_id is not None and m_id:
+        m_url = discord_message_url(guild_id, channel_id, m_id)
+        links.append(f"[message]({m_url})")
+    lines.append(" · ".join(links))
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Core logic
 # ---------------------------------------------------------------------------

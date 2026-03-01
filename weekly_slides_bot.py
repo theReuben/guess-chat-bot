@@ -46,6 +46,7 @@ SUBMISSION_PREFIX = "SUBMISSION"
 # Regexes that tolerate leading markdown formatting (headings, bold, italic).
 # Examples matched by _MARKER_LINE_RE: "GUESS CHAT Topic", "# GUESS CHAT Topic"
 # Examples matched by _SUBMISSION_RE: "SUBMISSION answer", "**SUBMISSION** answer"
+_MD_PREFIX_RE = re.compile(r"^[#*_ \t]+")
 _MARKER_LINE_RE = re.compile(r"^[#*_ \t]*(GUESS\s+CHAT)\b\s*(.*)", re.IGNORECASE)
 _SUBMISSION_RE = re.compile(r"^[#*_ \t]*(SUBMISSION)\b[*_]*\s*(.*)", re.IGNORECASE | re.DOTALL)
 
@@ -669,7 +670,7 @@ async def generate_slides(client: discord.Client) -> None:
     topic = marker_match.group(2).strip() if marker_match and marker_match.group(2).strip() else ""
     if not topic:
         for line in marker_msg.content.split("\n")[1:]:
-            candidate = re.sub(r"^[#*_ \t]+", "", line).strip()
+            candidate = _MD_PREFIX_RE.sub("", line).strip()
             if candidate:
                 topic = candidate
                 break

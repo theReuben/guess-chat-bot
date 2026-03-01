@@ -42,7 +42,7 @@ GOOGLE_CREDS_FILE = os.environ.get("GOOGLE_CREDS_FILE", "service_account.json")
 DRIVE_FOLDER_ID = os.environ.get("DRIVE_FOLDER_ID")
 STATE_FILE = os.environ.get("STATE_FILE", "state.json")
 TEMPLATE_DECK_ID = os.environ["TEMPLATE_DECK_ID"]
-MOD_ROLE_NAME = "Mod"
+MOD_ROLE_NAME = os.environ.get("MOD_ROLE_NAME", "Mod")
 
 MARKER_PREFIX = "GUESS CHAT"
 SUBMISSION_PREFIX = "SUBMISSION"
@@ -1131,7 +1131,7 @@ async def check_mod_and_announce(client: discord.Client) -> None:
 
     # Search for the most recent GUESS CHAT announcement from a Mod
     announcement_msg = None
-    async for msg in mod_channel.history(limit=100):
+    async for msg in mod_channel.history(limit=500):
         # Only consider messages from members with the Mod role
         if not isinstance(msg.author, discord.Member):
             continue

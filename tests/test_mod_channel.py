@@ -14,7 +14,7 @@ os.environ.setdefault("DISCORD_RESULTS_CHANNEL_ID", "2")
 os.environ.setdefault("TEMPLATE_DECK_ID", "tpl")
 
 import discord
-from weekly_slides_bot import _has_mod_role, check_mod_and_announce
+from weekly_slides_bot import _has_mod_role, check_mod_and_announce, extract_topic
 
 
 class TestHasModRole:
@@ -92,6 +92,7 @@ class TestCheckModAndAnnounce:
 
         mock_submissions_channel = MagicMock()
         mock_submissions_channel.send = AsyncMock()
+        mock_submissions_channel.edit = AsyncMock()
 
         mock_client = MagicMock()
         mock_client.get_channel.side_effect = lambda cid: {
@@ -130,6 +131,7 @@ class TestCheckModAndAnnounce:
 
         mock_submissions_channel = MagicMock()
         mock_submissions_channel.send = AsyncMock()
+        mock_submissions_channel.edit = AsyncMock()
 
         mock_client = MagicMock()
         mock_client.get_channel.side_effect = lambda cid: {
@@ -319,6 +321,7 @@ class TestCheckModAndAnnounce:
 
         mock_submissions_channel = MagicMock()
         mock_submissions_channel.send = AsyncMock()
+        mock_submissions_channel.edit = AsyncMock()
 
         mock_client = MagicMock()
         mock_client.get_channel.side_effect = lambda cid: {
@@ -553,3 +556,147 @@ class TestOneShotClientMode:
         client.on_ready = OneShotClient.on_ready.__get__(client, OneShotClient)
         await client.on_ready()
         mock_announce.assert_called_once()
+
+
+class TestExtractTopic:
+    """Tests for the extract_topic helper."""
+
+    def test_topic_on_same_line(self):
+        assert extract_topic("GUESS CHAT Favourite Food") == "Favourite Food"
+
+    def test_topic_on_next_line_with_heading(self):
+        assert extract_topic("# GUESS CHAT\n# DnD Characters") == "DnD Characters"
+
+    def test_unknown_when_no_topic(self):
+        assert extract_topic("GUESS CHAT") == "Unknown"
+
+    def test_heading_marker_with_topic_on_same_line(self):
+        assert extract_topic("# GUESS CHAT DnD Characters") == "DnD Characters"
+
+    def test_strips_markdown_from_second_line(self):
+        assert extract_topic("# GUESS CHAT\n# LEAST FAVE POKEMON\n- @everyone") == "LEAST FAVE POKEMON"
+
+
+class TestChannelDescriptionUpdate:
+    """Tests that the channel description is updated when an announcement is forwarded."""
+
+    @pytest.mark.asyncio
+    @patch("weekly_slides_bot.save_state")
+    @patch("weekly_slides_bot.load_state", return_value={})
+    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)
+    async def test_channel_topic_updated_on_announce(self, _load, _save):
+        """After forwarding, the submissions channel description should be updated."""
+        mod_role = MagicMock()
+        mod_role.name = "Mod"
+
+        mod_author = MagicMock(spec=discord.Member)
+        mod_author.roles = [mod_role]
+
+        mod_msg = MagicMock()
+        mod_msg.id = 500
+        mod_msg.content = "GUESS CHAT Favourite Food"
+        mod_msg.author = mod_author
+
+        async def mod_history(*args, **kwargs):
+            yield mod_msg
+
+        mock_mod_channel = MagicMock()
+        mock_mod_channel.history = mod_history
+
+        mock_submissions_channel = MagicMock()
+        mock_submissions_channel.send = AsyncMock()
+        mock_submissions_channel.edit = AsyncMock()
+
+        mock_client = MagicMock()
+        mock_client.get_channel.side_effect = lambda cid: {
+            3: mock_mod_channel,
+            1: mock_submissions_channel,
+        }.get(cid)
+
+        await check_mod_and_announce(mock_client)
+
+        mock_submissions_channel.edit.assert_called_once_with(
+            topic="Current Guess Chat: Favourite Food"
+        )
+
+    @pytest.mark.asyncio
+    @patch("weekly_slides_bot.save_state")
+    @patch("weekly_slides_bot.load_state", return_value={})
+    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)
+    async def test_channel_topic_updated_with_multiline_topic(self, _load, _save):
+        """Topic on the second line should still update the channel description."""
+        mod_role = MagicMock()
+        mod_role.name = "Mod"
+
+        mod_author = MagicMock(spec=discord.Member)
+        mod_author.roles = [mod_role]
+
+        mod_msg = MagicMock()
+        mod_msg.id = 600
+        mod_msg.content = "# GUESS CHAT\n# DnD Characters"
+        mod_msg.author = mod_author
+
+        async def mod_history(*args, **kwargs):
+            yield mod_msg
+
+        mock_mod_channel = MagicMock()
+        mock_mod_channel.history = mod_history
+
+        mock_submissions_channel = MagicMock()
+        mock_submissions_channel.send = AsyncMock()
+        mock_submissions_channel.edit = AsyncMock()
+
+        mock_client = MagicMock()
+        mock_client.get_channel.side_effect = lambda cid: {
+            3: mock_mod_channel,
+            1: mock_submissions_channel,
+        }.get(cid)
+
+        await check_mod_and_announce(mock_client)
+
+        mock_submissions_channel.edit.assert_called_once_with(
+            topic="Current Guess Chat: DnD Characters"
+        )
+
+    @pytest.mark.asyncio
+    @patch("weekly_slides_bot.save_state")
+    @patch("weekly_slides_bot.load_state", return_value={})
+    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)
+    async def test_graceful_on_forbidden(self, _load, _save, capsys):
+        """If the bot lacks Manage Channels permission, it should not crash."""
+        mod_role = MagicMock()
+        mod_role.name = "Mod"
+
+        mod_author = MagicMock(spec=discord.Member)
+        mod_author.roles = [mod_role]
+
+        mod_msg = MagicMock()
+        mod_msg.id = 700
+        mod_msg.content = "GUESS CHAT Topic"
+        mod_msg.author = mod_author
+
+        async def mod_history(*args, **kwargs):
+            yield mod_msg
+
+        mock_mod_channel = MagicMock()
+        mock_mod_channel.history = mod_history
+
+        mock_submissions_channel = MagicMock()
+        mock_submissions_channel.send = AsyncMock()
+        mock_submissions_channel.edit = AsyncMock(
+            side_effect=discord.Forbidden(MagicMock(), "Missing Permissions")
+        )
+
+        mock_client = MagicMock()
+        mock_client.get_channel.side_effect = lambda cid: {
+            3: mock_mod_channel,
+            1: mock_submissions_channel,
+        }.get(cid)
+
+        # Should not raise
+        await check_mod_and_announce(mock_client)
+
+        # The announcement should still have been sent
+        mock_submissions_channel.send.assert_called_once()
+        # State should still be saved
+        _save.assert_called_once()

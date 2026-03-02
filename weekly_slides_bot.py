@@ -64,6 +64,32 @@ _YOUTUBE_URL_RE = re.compile(
 
 
 # ---------------------------------------------------------------------------
+# Topic extraction
+# ---------------------------------------------------------------------------
+
+
+def extract_topic(content: str) -> str:
+    """Extract the topic from a GUESS CHAT message.
+
+    Handles both ``GUESS CHAT Topic`` on one line and multi-line formats
+    like ``# GUESS CHAT\\n# Topic``.  Returns ``"Unknown"`` when no topic
+    text can be found.
+    """
+    first_line = content.split("\n", 1)[0]
+    marker_match = _MARKER_LINE_RE.match(first_line)
+    topic = marker_match.group(2).strip() if marker_match and marker_match.group(2).strip() else ""
+    if not topic:
+        for line in content.split("\n")[1:]:
+            candidate = _MD_PREFIX_RE.sub("", line).strip()
+            if candidate:
+                topic = candidate
+                break
+    if not topic:
+        topic = "Unknown"
+    return topic
+
+
+# ---------------------------------------------------------------------------
 # State helpers
 # ---------------------------------------------------------------------------
 
@@ -958,19 +984,7 @@ async def generate_slides(client: discord.Client) -> None:
         return
 
     marker_id = str(marker_msg.id)
-    # Extract topic: everything after "GUESS CHAT" on the first line,
-    # or the first non-empty line after it (handles "# GUESS CHAT\n# TOPIC").
-    first_line = marker_msg.content.split("\n", 1)[0]
-    marker_match = _MARKER_LINE_RE.match(first_line)
-    topic = marker_match.group(2).strip() if marker_match and marker_match.group(2).strip() else ""
-    if not topic:
-        for line in marker_msg.content.split("\n")[1:]:
-            candidate = _MD_PREFIX_RE.sub("", line).strip()
-            if candidate:
-                topic = candidate
-                break
-    if not topic:
-        topic = "Unknown"
+    topic = extract_topic(marker_msg.content)
 
     # --- Collect SUBMISSION messages after the marker ---
     all_submissions: list[dict] = []
@@ -1177,6 +1191,16 @@ async def check_mod_and_announce(client: discord.Client) -> None:
 
     await submissions_channel.send(announcement_msg.content)
     print(f"[info] Forwarded GUESS CHAT announcement to submissions channel.")
+
+    # Update the submissions channel description with the current topic
+    topic = extract_topic(announcement_msg.content)
+    try:
+        await submissions_channel.edit(topic=f"Current Guess Chat: {topic}")
+        print(f"[info] Updated channel description to 'Current Guess Chat: {topic}'.")
+    except discord.Forbidden:
+        print("[warn] Missing Manage Channels permission; could not update channel description.")
+    except discord.HTTPException as exc:
+        print(f"[warn] Failed to update channel description: {exc}")
 
     # Persist the announced message ID to avoid re-announcing
     state["last_announced_mod_msg_id"] = str(announcement_msg.id)

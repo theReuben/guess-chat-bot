@@ -55,7 +55,7 @@ When someone posts a `GUESS CHAT <topic>` marker in the submissions channel, pla
 1. Go to the [Discord Developer Portal](https://discord.com/developers/applications) and create a new application.
 2. Navigate to **Bot**, enable **Message Content Intent** under *Privileged Gateway Intents*.
 3. Under **OAuth2 → URL Generator**, select scopes: `bot` only.
-4. Select permissions: `View Channels`, `Read Message History`, `Send Messages`.
+4. Select permissions: `View Channels`, `Read Message History`, `Send Messages`, `Manage Channels`.
 5. Use the generated URL to invite the bot to your server.
 6. Copy the bot token — this is your `DISCORD_TOKEN`.
 7. Enable **Developer Mode** in Discord (User Settings → Advanced), then right-click the submissions channel and results channel to copy their IDs (`DISCORD_CHANNEL_ID` and `DISCORD_RESULTS_CHANNEL_ID`).
@@ -218,6 +218,7 @@ Running on GitHub Actions free tier: **$0/month**. Each run takes under a minute
 | Problem | Solution |
 |---|---|
 | Bot can't find the channel | Ensure Message Content Intent is enabled and the bot has been invited with `View Channels` + `Read Message History` permissions |
+| Channel description not updating | Ensure the bot has `Manage Channels` permission |
 | `KeyError: DISCORD_TOKEN` | Set the required environment variable or GitHub secret |
 | Google API 403 error | Make sure your Google account has Editor access to both the template deck and the Drive folder, and that the OAuth token has the correct scopes |
 | Template slide not found | Ensure Slide 2 of the template contains the text `{{AUTHOR}}` in a text box |

@@ -1194,8 +1194,30 @@ async def check_mod_and_announce(client: discord.Client) -> None:
         return
 
     # --- Post the GUESS CHAT announcement ---
-    await submissions_channel.send(f"GUESS CHAT {topic}")
+    posted_msg = await submissions_channel.send(f"GUESS CHAT {topic}")
     print(f"[info] Posted GUESS CHAT announcement for topic '{topic}'.")
+
+    # --- Send confirmation to mod channel ---
+    if DISCORD_MOD_CHANNEL_ID is not None:
+        mod_channel = client.get_channel(DISCORD_MOD_CHANNEL_ID)
+        if mod_channel is not None:
+            guild = getattr(submissions_channel, "guild", None)
+            guild_id = guild.id if guild is not None else None
+            if guild_id is not None:
+                msg_url = discord_message_url(guild_id, DISCORD_CHANNEL_ID, str(posted_msg.id))
+                await mod_channel.send(
+                    f"@Mods New Guess Chat theme: **{topic}**\n"
+                    f"Are there any extras we should add?\n"
+                    f"{msg_url}"
+                )
+            else:
+                await mod_channel.send(
+                    f"@Mods New Guess Chat theme: **{topic}**\n"
+                    f"Are there any extras we should add?"
+                )
+            print("[info] Sent confirmation to mod channel.")
+        else:
+            print(f"[warn] Could not find mod channel {DISCORD_MOD_CHANNEL_ID}")
 
     # Persist the announced topic to avoid re-announcing
     state["last_announced_topic"] = topic

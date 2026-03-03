@@ -204,6 +204,60 @@ class TestCheckModAndAnnounce:
 
         mock_channel.send.assert_called_once_with("GUESS CHAT New Topic")
 
+    @pytest.mark.asyncio
+    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)
+    @patch("weekly_slides_bot.save_state")
+    @patch("weekly_slides_bot.load_state", return_value={})
+    async def test_sends_confirmation_to_mod_channel(self, _load, _save):
+        """After posting a new announcement, a confirmation is sent to the mod channel."""
+        posted_msg = MagicMock()
+        posted_msg.id = 12345
+
+        mock_channel = MagicMock()
+        mock_channel.topic = "Current Guess Chat: Favourite Food"
+        mock_channel.send = AsyncMock(return_value=posted_msg)
+        mock_channel.guild = MagicMock()
+        mock_channel.guild.id = 99999
+
+        mock_mod_channel = MagicMock()
+        mock_mod_channel.send = AsyncMock()
+
+        mock_client = MagicMock()
+        mock_client.get_channel.side_effect = lambda cid: {
+            1: mock_channel,
+            3: mock_mod_channel,
+        }.get(cid)
+
+        await check_mod_and_announce(mock_client)
+
+        mock_mod_channel.send.assert_called_once()
+        confirmation = mock_mod_channel.send.call_args.args[0]
+        assert "@Mods" in confirmation
+        assert "Favourite Food" in confirmation
+        assert "extras" in confirmation.lower()
+        assert "https://discord.com/channels/99999/1/12345" in confirmation
+
+    @pytest.mark.asyncio
+    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", None)
+    @patch("weekly_slides_bot.save_state")
+    @patch("weekly_slides_bot.load_state", return_value={})
+    async def test_no_confirmation_when_mod_channel_not_configured(self, _load, _save):
+        """When DISCORD_MOD_CHANNEL_ID is not set, no confirmation is sent."""
+        posted_msg = MagicMock()
+        posted_msg.id = 12345
+
+        mock_channel = MagicMock()
+        mock_channel.topic = "Current Guess Chat: Movies"
+        mock_channel.send = AsyncMock(return_value=posted_msg)
+
+        mock_client = MagicMock()
+        mock_client.get_channel.return_value = mock_channel
+
+        await check_mod_and_announce(mock_client)
+
+        # Only the GUESS CHAT announcement should be sent, no mod confirmation
+        mock_channel.send.assert_called_once_with("GUESS CHAT Movies")
+
 
 class TestMarkerFallback:
     """Tests that generate_slides prefers bot markers but falls back to any marker."""

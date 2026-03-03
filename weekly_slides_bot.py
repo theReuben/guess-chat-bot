@@ -93,7 +93,7 @@ def extract_topic(content: str) -> str:
     return topic
 
 
-def parse_channel_topic(description: str) -> str | None:
+def parse_channel_topic(description: str | None) -> str | None:
     """Parse the topic from a channel description.
 
     Returns the topic string if the description matches
@@ -1004,9 +1004,12 @@ async def generate_slides(client: discord.Client) -> None:
 
     # --- Find the most recent GUESS CHAT marker from the bot ---
     marker_msg = None
-    bot_user_id = client.user.id if client.user else None
+    if client.user is None:
+        print("[error] Bot user not available; cannot identify own messages.")
+        return
+    bot_user_id = client.user.id
     async for msg in channel.history(limit=500):
-        if bot_user_id is not None and msg.author.id != bot_user_id:
+        if msg.author.id != bot_user_id:
             continue
         first_line = msg.content.split("\n", 1)[0]
         if _MARKER_LINE_RE.match(first_line):

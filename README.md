@@ -20,7 +20,9 @@ When a mod updates the submissions channel description to `Current Guess Chat: <
 
 - **Round detection** — detects new rounds by tracking the marker message ID in `state.json`.
 - **Channel-description announcement** — reads the channel description for the current topic and posts a `GUESS CHAT` marker automatically.
+- **Mod channel confirmation** — after posting a new announcement, sends a confirmation to the mod channel with `@Mods`, the new theme, a link to the posted message, and asks whether there are any extras to add.
 - **Friday reminder** — if the topic hasn't changed by the Friday run, sends a reminder to the mod channel asking if there's a new guess chat this week.
+- **Error routing** — processing errors (e.g. image upload failures) are sent to the mod channel when configured, falling back to the results channel.
 - **Image support** — Discord attachment images are re-uploaded to Google Drive (to avoid CDN link expiration) and placed in a 2×2 grid on each slide.
 - **Incremental updates** — if the bot runs again in the same round, it appends only the new submissions.
 - **Duplicate prevention** — processed message IDs are stored in state.
@@ -34,12 +36,13 @@ When a mod updates the submissions channel description to `Current Guess Chat: <
 
 1. A mod updates the submissions channel description to `Current Guess Chat: <topic>` (e.g. `Current Guess Chat: DnD Characters`).
 2. The bot detects the new topic and posts a `GUESS CHAT <topic>` announcement in the submissions channel.
-3. Players reply with `SUBMISSION <their answer>`, optionally attaching images.
-4. The bot runs on Friday and generates the two decks.
-5. The results channel receives a message with:
+3. The bot sends a confirmation message to the mod channel with `@Mods`, the new theme, a link to the posted message, and asks if there are any extras to add.
+4. Players reply with `SUBMISSION <their answer>`, optionally attaching images.
+5. The bot runs on Friday and generates the two decks.
+6. The results channel receives a message with:
    - A link to the **anonymous** deck (everyone can guess).
    - A link to the **named** deck (answers revealed).
-6. If the channel description hasn't changed by Friday, the bot sends a reminder to the mod channel.
+7. If the channel description hasn't changed by Friday, the bot sends a reminder to the mod channel.
 
 ---
 
@@ -108,9 +111,17 @@ Add the following secrets to your repository (**Settings → Secrets and variabl
 | `DISCORD_TOKEN` | Discord bot token |
 | `DISCORD_CHANNEL_ID` | Submissions channel ID |
 | `DISCORD_RESULTS_CHANNEL_ID` | Results channel ID |
+| `DISCORD_MOD_CHANNEL_ID` | *(optional)* Mod channel ID — used for confirmations, reminders, and error notifications |
 | `DRIVE_FOLDER_ID` | Google Drive folder ID for generated decks |
 | `TEMPLATE_DECK_ID` | Google Slides template presentation ID |
 | `GOOGLE_OAUTH_TOKEN` | OAuth2 token JSON with `client_id`, `client_secret`, `refresh_token`, and `token_uri` |
+
+The following environment variables are set automatically by the workflow or have sensible defaults. Override them in `.env` when running locally:
+
+| Variable | Default | Description |
+|---|---|---|
+| `BOT_MODE` | `slides` | `slides` to generate decks, `announce` to post the GUESS CHAT marker and mod confirmation |
+| `MOD_ROLE_NAME` | `Mod` | Discord role name used to identify moderators |
 
 ---
 
@@ -118,12 +129,14 @@ Add the following secrets to your repository (**Settings → Secrets and variabl
 
 ### Automatic (Scheduled)
 
-The workflow runs every **Friday at 11:30 AM UK time**. Two cron expressions handle the clocks-change:
+The workflow runs every **Friday at 11:30 AM UK time** (slides mode) and again at **6:00 PM UK time** (announce mode). Two cron expressions per mode handle the clocks-change:
 
-- `30 10 * * 5` — 10:30 UTC = 11:30 BST (summer, UTC+1)
-- `30 11 * * 5` — 11:30 UTC = 11:30 GMT (winter, UTC+0)
+- `30 10 * * 5` — 10:30 UTC = 11:30 BST (slides, summer)
+- `30 11 * * 5` — 11:30 UTC = 11:30 GMT (slides, winter)
+- `0 17 * * 5` — 17:00 UTC = 18:00 BST (announce, summer)
+- `0 18 * * 5` — 18:00 UTC = 18:00 GMT (announce, winter)
 
-At the start of each run the workflow reads the current UK hour and skips execution if it is not 11, preventing double-runs during the DST change weekends.
+At the start of each run the workflow reads the current UK hour and sets the appropriate mode (11 → slides, 18 → announce), skipping execution for any other hour to prevent double-runs during DST change weekends.
 
 ### Manual Trigger
 
@@ -164,7 +177,8 @@ The workflow:
   "topic": "DnD Characters",
   "named_pres_id": "abc123...",
   "anon_pres_id":  "xyz789...",
-  "processed_ids": ["111", "222", "333"]
+  "processed_ids": ["111", "222", "333"],
+  "last_announced_topic": "DnD Characters"
 }
 ```
 
@@ -202,12 +216,14 @@ To reset state manually, delete or empty `state.json` on the `state` branch, or 
 
 ## DST / Timezone Handling
 
-The UK observes **BST (UTC+1)** from late March to late October and **GMT (UTC+0)** otherwise. GitHub Actions cron uses UTC, so two cron triggers are used:
+The UK observes **BST (UTC+1)** from late March to late October and **GMT (UTC+0)** otherwise. GitHub Actions cron uses UTC, so two cron triggers per mode are used:
 
-- **Summer**: `30 10 * * 5` fires at 10:30 UTC = 11:30 BST.
-- **Winter**: `30 11 * * 5` fires at 11:30 UTC = 11:30 GMT.
+- **Slides — Summer**: `30 10 * * 5` fires at 10:30 UTC = 11:30 BST.
+- **Slides — Winter**: `30 11 * * 5` fires at 11:30 UTC = 11:30 GMT.
+- **Announce — Summer**: `0 17 * * 5` fires at 17:00 UTC = 18:00 BST.
+- **Announce — Winter**: `0 18 * * 5` fires at 18:00 UTC = 18:00 GMT.
 
-On clocks-change Fridays, both crons fire. The DST guard at the start of the job reads `TZ='Europe/London' date +%H` and skips the run if the UK hour is not 11.
+On clocks-change Fridays, both crons for the same mode fire. The DST guard at the start of the job reads `TZ='Europe/London' date +%H` and skips the run if the UK hour doesn't match 11 (slides) or 18 (announce).
 
 ---
 

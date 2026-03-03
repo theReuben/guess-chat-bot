@@ -24,9 +24,14 @@ When a mod updates the submissions channel description to `Current Guess Chat: <
 - **Friday reminder** — if the topic hasn't changed by the Friday run, sends a reminder to the mod channel asking if there's a new guess chat this week.
 - **Error routing** — processing errors (e.g. image upload failures) are sent to the mod channel when configured, falling back to the results channel.
 - **Image support** — Discord attachment images are re-uploaded to Google Drive (to avoid CDN link expiration) and placed in a 2×2 grid on each slide.
+- **YouTube video embedding** — YouTube links in submissions are detected and embedded as playable videos on the slide (first video only; used when no image attachments are present).
+- **Clickable hyperlinks** — URLs in submission text are automatically converted to clickable hyperlinks on the slides.
+- **Markdown-tolerant detection** — `GUESS CHAT` and `SUBMISSION` prefixes are recognised even with leading markdown formatting (headings, bold, italic), e.g. `# GUESS CHAT` or `**SUBMISSION**`.
+- **Display name resolution** — the bot fetches each submitter's guild member profile to use their server nickname (`display_name`) instead of their username.
 - **Incremental updates** — if the bot runs again in the same round, it appends only the new submissions.
-- **Duplicate prevention** — processed message IDs are stored in state.
+- **Duplicate prevention** — processed message IDs are stored in state; only the latest submission per author is kept.
 - **Auto-posting** — posts results directly to a Discord channel.
+- **API retry with backoff** — transient Google API errors (429, 500, 503) are retried with exponential backoff.
 - **Scheduled runs** — GitHub Actions triggers every Friday at 11:30 AM UK time (handles BST/GMT automatically).
 - **Manual trigger** — run from the GitHub Actions UI with an optional `force_reset` to start a fresh round.
 
@@ -233,6 +238,19 @@ Running on GitHub Actions free tier: **$0/month**. Each run takes under a minute
 
 ---
 
+## Testing
+
+Run the test suite with:
+
+```bash
+pip install -r requirements.txt pytest pytest-asyncio
+pytest tests/
+```
+
+Tests use `unittest.mock` (`MagicMock`, `AsyncMock`, `patch`) to mock all Discord and Google API calls — no real credentials are needed.
+
+---
+
 ## Troubleshooting
 
 | Problem | Solution |
@@ -267,5 +285,18 @@ guess-chat-bot/
 │       └── weekly-slides.yml           # GitHub Actions scheduled workflow
 ├── README.md                           # This file
 ├── requirements.txt                    # Python dependencies
+├── tests/                              # pytest test suite
+│   ├── test_cleanup.py
+│   ├── test_display_name.py
+│   ├── test_error_notifications.py
+│   ├── test_execute_retry.py
+│   ├── test_hyperlinks.py
+│   ├── test_image_handling.py
+│   ├── test_image_insert_error.py
+│   ├── test_markdown_detection.py
+│   ├── test_mod_channel.py
+│   ├── test_rate_limit.py
+│   ├── test_thread_offload.py
+│   └── test_youtube.py
 └── weekly_slides_bot.py                # Main bot script
 ```

@@ -987,19 +987,25 @@ async def generate_slides(client: discord.Client) -> None:
         print(f"[error] Could not find channel {DISCORD_CHANNEL_ID}")
         return
 
-    # --- Find the most recent GUESS CHAT marker from the bot ---
+    # --- Find the most recent GUESS CHAT marker ---
+    # Prefer a marker posted by the bot itself.  Fall back to *any* GUESS CHAT
+    # marker so that legacy mod-posted markers still work this week.
+    # TODO: remove the legacy fallback once the bot has posted its own marker.
     marker_msg = None
-    if client.user is None:
-        print("[error] Bot user not available; cannot identify own messages.")
-        return
-    bot_user_id = client.user.id
+    fallback_marker_msg = None
+    bot_user_id = client.user.id if client.user else None
     async for msg in channel.history(limit=500):
-        if msg.author.id != bot_user_id:
-            continue
         first_line = msg.content.split("\n", 1)[0]
         if _MARKER_LINE_RE.match(first_line):
-            marker_msg = msg
-            break
+            if bot_user_id is not None and msg.author.id == bot_user_id:
+                marker_msg = msg
+                break
+            if fallback_marker_msg is None:
+                fallback_marker_msg = msg
+
+    if marker_msg is None and fallback_marker_msg is not None:
+        marker_msg = fallback_marker_msg
+        print("[info] Using non-bot GUESS CHAT marker as fallback.")
 
     if marker_msg is None:
         print("[info] No GUESS CHAT marker found; nothing to do.")

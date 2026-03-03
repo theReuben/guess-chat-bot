@@ -205,8 +205,8 @@ class TestCheckModAndAnnounce:
         mock_channel.send.assert_called_once_with("GUESS CHAT New Topic")
 
 
-class TestBotOnlyMarkerFilter:
-    """Tests that generate_slides only considers the bot's own messages for the GUESS CHAT marker."""
+class TestMarkerFallback:
+    """Tests that generate_slides prefers bot markers but falls back to any marker."""
 
     @pytest.mark.asyncio
     @patch("weekly_slides_bot.save_state")
@@ -215,24 +215,41 @@ class TestBotOnlyMarkerFilter:
     @patch("weekly_slides_bot.copy_presentation", return_value="pres_id")
     @patch("weekly_slides_bot.get_google_services", return_value=(MagicMock(), MagicMock()))
     @patch("weekly_slides_bot.load_state", return_value={})
-    async def test_ignores_non_bot_marker_messages(
-        self, _load, _gcs, _copy, _share, _build, mock_save
+    async def test_falls_back_to_non_bot_marker(
+        self, _load, _gcs, _copy, _share, mock_build, mock_save
     ):
-        """Only GUESS CHAT messages from the bot itself should be used as markers."""
+        """When no bot-authored marker exists, a legacy non-bot marker is used."""
         from weekly_slides_bot import generate_slides
 
         bot_user = MagicMock()
         bot_user.id = 42
 
-        # A non-bot user posted a GUESS CHAT message
+        # A non-bot user posted a GUESS CHAT message (legacy)
         user_marker = MagicMock()
         user_marker.id = 100
-        user_marker.content = "GUESS CHAT SomeOtherTopic"
+        user_marker.content = "GUESS CHAT LegacyTopic"
         user_marker.author = MagicMock()
         user_marker.author.id = 999  # not the bot
 
+        sub_msg = MagicMock()
+        sub_msg.id = 200
+        sub_msg.content = "SUBMISSION answer"
+        sub_msg.attachments = []
+        sub_msg.author = MagicMock()
+        sub_msg.author.id = 888
+        sub_msg.author.display_name = "User"
+        sub_msg.guild = MagicMock()
+        sub_msg.guild.get_member.return_value = MagicMock(display_name="User")
+
+        call_count = 0
+
         async def history_side_effect(*args, **kwargs):
-            yield user_marker
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                yield user_marker
+            else:
+                yield sub_msg
 
         mock_channel = MagicMock()
         mock_channel.history = history_side_effect
@@ -240,14 +257,94 @@ class TestBotOnlyMarkerFilter:
         mock_channel.guild.id = 12345
         mock_channel.topic = ""
 
+        mock_results_channel = MagicMock()
+        mock_results_channel.send = AsyncMock()
+
         mock_client = MagicMock()
         mock_client.user = bot_user
-        mock_client.get_channel.return_value = mock_channel
+        mock_client.get_channel.side_effect = lambda cid: (
+            mock_channel if cid == 1 else mock_results_channel
+        )
 
         await generate_slides(mock_client)
 
-        # Should not have called save_state since no bot marker was found
-        mock_save.assert_not_called()
+        # The legacy marker should have been used — save_state should be called
+        mock_save.assert_called()
+        saved_state = mock_save.call_args.args[0]
+        assert saved_state["marker_id"] == "100"
+
+    @pytest.mark.asyncio
+    @patch("weekly_slides_bot.save_state")
+    @patch("weekly_slides_bot.build_deck", return_value=[])
+    @patch("weekly_slides_bot.share_presentation")
+    @patch("weekly_slides_bot.copy_presentation", return_value="pres_id")
+    @patch("weekly_slides_bot.get_google_services", return_value=(MagicMock(), MagicMock()))
+    @patch("weekly_slides_bot.load_state", return_value={})
+    async def test_prefers_bot_marker_over_legacy(
+        self, _load, _gcs, _copy, _share, mock_build, mock_save
+    ):
+        """When both a bot marker and a legacy marker exist, the bot marker wins."""
+        from weekly_slides_bot import generate_slides
+
+        bot_user = MagicMock()
+        bot_user.id = 42
+
+        # Legacy non-bot marker (older, appears later in history)
+        legacy_marker = MagicMock()
+        legacy_marker.id = 50
+        legacy_marker.content = "GUESS CHAT OldTopic"
+        legacy_marker.author = MagicMock()
+        legacy_marker.author.id = 999
+
+        # Bot-authored marker (newer, appears first in history)
+        bot_marker = MagicMock()
+        bot_marker.id = 100
+        bot_marker.content = "GUESS CHAT NewTopic"
+        bot_marker.author = MagicMock()
+        bot_marker.author.id = 42
+
+        sub_msg = MagicMock()
+        sub_msg.id = 200
+        sub_msg.content = "SUBMISSION answer"
+        sub_msg.attachments = []
+        sub_msg.author = MagicMock()
+        sub_msg.author.id = 888
+        sub_msg.author.display_name = "User"
+        sub_msg.guild = MagicMock()
+        sub_msg.guild.get_member.return_value = MagicMock(display_name="User")
+
+        call_count = 0
+
+        async def history_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # First call: marker scan — bot marker appears first (most recent)
+                yield bot_marker
+                yield legacy_marker
+            else:
+                yield sub_msg
+
+        mock_channel = MagicMock()
+        mock_channel.history = history_side_effect
+        mock_channel.guild = MagicMock()
+        mock_channel.guild.id = 12345
+        mock_channel.topic = ""
+
+        mock_results_channel = MagicMock()
+        mock_results_channel.send = AsyncMock()
+
+        mock_client = MagicMock()
+        mock_client.user = bot_user
+        mock_client.get_channel.side_effect = lambda cid: (
+            mock_channel if cid == 1 else mock_results_channel
+        )
+
+        await generate_slides(mock_client)
+
+        mock_save.assert_called()
+        saved_state = mock_save.call_args.args[0]
+        assert saved_state["marker_id"] == "100"  # bot marker, not legacy
 
 
 class TestStatePreservation:

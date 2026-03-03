@@ -202,6 +202,7 @@ def _make_client(marker_msg, *sub_msgs):
     mock_results_channel = MagicMock()
     mock_results_channel.send = AsyncMock()
     mock_client = MagicMock()
+    mock_client.user = MagicMock(id=marker_msg.author.id)
     mock_client.get_channel.side_effect = lambda cid: (
         mock_channel if cid == 1 else mock_results_channel
     )

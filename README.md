@@ -6,7 +6,7 @@ A Discord bot that scans a submissions channel for **GUESS CHAT** rounds, genera
 
 ## Overview
 
-When someone posts a `GUESS CHAT <topic>` marker in the submissions channel, players reply with their `SUBMISSION <text>` messages (optionally attaching images). The bot:
+When a mod updates the submissions channel description to `Current Guess Chat: <topic>`, the bot detects the new topic and posts a `GUESS CHAT <topic>` announcement. Players reply with their `SUBMISSION <text>` messages (optionally attaching images). The bot:
 
 1. Finds the latest marker and collects all submissions after it.
 2. Copies a Google Slides template twice — one **named** deck (answers revealed) and one **anonymous** deck (for guessing).
@@ -19,6 +19,8 @@ When someone posts a `GUESS CHAT <topic>` marker in the submissions channel, pla
 ## Features
 
 - **Round detection** — detects new rounds by tracking the marker message ID in `state.json`.
+- **Channel-description announcement** — reads the channel description for the current topic and posts a `GUESS CHAT` marker automatically.
+- **Friday reminder** — if the topic hasn't changed by the Friday run, sends a reminder to the mod channel asking if there's a new guess chat this week.
 - **Image support** — Discord attachment images are re-uploaded to Google Drive (to avoid CDN link expiration) and placed in a 2×2 grid on each slide.
 - **Incremental updates** — if the bot runs again in the same round, it appends only the new submissions.
 - **Duplicate prevention** — processed message IDs are stored in state.
@@ -30,12 +32,14 @@ When someone posts a `GUESS CHAT <topic>` marker in the submissions channel, pla
 
 ## How the Game Works
 
-1. An admin posts a message starting with `GUESS CHAT <topic>` in the submissions channel (e.g. `GUESS CHAT DnD Characters`).
-2. Players reply with `SUBMISSION <their answer>`, optionally attaching images.
-3. The bot runs (scheduled or manual) and generates the two decks.
-4. The results channel receives a message with:
+1. A mod updates the submissions channel description to `Current Guess Chat: <topic>` (e.g. `Current Guess Chat: DnD Characters`).
+2. The bot detects the new topic and posts a `GUESS CHAT <topic>` announcement in the submissions channel.
+3. Players reply with `SUBMISSION <their answer>`, optionally attaching images.
+4. The bot runs on Friday and generates the two decks.
+5. The results channel receives a message with:
    - A link to the **anonymous** deck (everyone can guess).
    - A link to the **named** deck (answers revealed).
+6. If the channel description hasn't changed by Friday, the bot sends a reminder to the mod channel.
 
 ---
 
@@ -55,7 +59,7 @@ When someone posts a `GUESS CHAT <topic>` marker in the submissions channel, pla
 1. Go to the [Discord Developer Portal](https://discord.com/developers/applications) and create a new application.
 2. Navigate to **Bot**, enable **Message Content Intent** under *Privileged Gateway Intents*.
 3. Under **OAuth2 → URL Generator**, select scopes: `bot` only.
-4. Select permissions: `View Channels`, `Read Message History`, `Send Messages`, `Manage Channels`.
+4. Select permissions: `View Channels`, `Read Message History`, `Send Messages`.
 5. Use the generated URL to invite the bot to your server.
 6. Copy the bot token — this is your `DISCORD_TOKEN`.
 7. Enable **Developer Mode** in Discord (User Settings → Advanced), then right-click the submissions channel and results channel to copy their IDs (`DISCORD_CHANNEL_ID` and `DISCORD_RESULTS_CHANNEL_ID`).
@@ -218,7 +222,6 @@ Running on GitHub Actions free tier: **$0/month**. Each run takes under a minute
 | Problem | Solution |
 |---|---|
 | Bot can't find the channel | Ensure Message Content Intent is enabled and the bot has been invited with `View Channels` + `Read Message History` permissions |
-| Channel description not updating | Ensure the bot has `Manage Channels` permission |
 | `KeyError: DISCORD_TOKEN` | Set the required environment variable or GitHub secret |
 | Google API 403 error | Make sure your Google account has Editor access to both the template deck and the Drive folder, and that the OAuth token has the correct scopes |
 | Template slide not found | Ensure Slide 2 of the template contains the text `{{AUTHOR}}` in a text box |

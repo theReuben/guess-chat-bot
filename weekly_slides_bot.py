@@ -987,21 +987,6 @@ async def generate_slides(client: discord.Client) -> None:
         print(f"[error] Could not find channel {DISCORD_CHANNEL_ID}")
         return
 
-    # --- Check channel description for topic and send reminder if needed ---
-    description_topic = parse_channel_topic(getattr(channel, "topic", "") or "")
-    last_known_topic = state.get("topic")
-    if description_topic and description_topic == last_known_topic:
-        # Topic hasn't changed since the last completed round – remind mods.
-        if DISCORD_MOD_CHANNEL_ID is not None:
-            mod_channel = client.get_channel(DISCORD_MOD_CHANNEL_ID)
-            if mod_channel is not None:
-                await mod_channel.send(
-                    "@Mods we haven't announced a new guess chat yet, is there a new one this week?"
-                )
-                print("[info] Sent reminder to mod channel about missing new topic.")
-            else:
-                print(f"[warn] Could not find mod channel {DISCORD_MOD_CHANNEL_ID}")
-
     # --- Find the most recent GUESS CHAT marker from the bot ---
     marker_msg = None
     if client.user is None:
@@ -1171,7 +1156,8 @@ async def check_mod_and_announce(client: discord.Client) -> None:
     The channel description is expected to follow the format
     ``Current Guess Chat: <topic>``.  If the topic differs from the last
     announced topic (stored in state), the bot posts a ``GUESS CHAT <topic>``
-    message in the submissions channel.
+    message in the submissions channel.  If the topic is unchanged, a reminder
+    is sent to the mod channel.
     """
     # --- Read the submissions channel description ---
     submissions_channel = client.get_channel(DISCORD_CHANNEL_ID)
@@ -1188,7 +1174,17 @@ async def check_mod_and_announce(client: discord.Client) -> None:
     # --- Check whether this topic has already been announced ---
     state = load_state()
     if topic == state.get("last_announced_topic"):
-        print("[info] Topic unchanged; already announced. Nothing to do.")
+        print("[info] Topic unchanged; already announced.")
+        # Send a reminder to the mod channel asking if there's a new topic.
+        if DISCORD_MOD_CHANNEL_ID is not None:
+            mod_channel = client.get_channel(DISCORD_MOD_CHANNEL_ID)
+            if mod_channel is not None:
+                await mod_channel.send(
+                    "@Mods we haven't announced a new guess chat yet, is there a new one this week?"
+                )
+                print("[info] Sent reminder to mod channel about missing new topic.")
+            else:
+                print(f"[warn] Could not find mod channel {DISCORD_MOD_CHANNEL_ID}")
         return
 
     # --- Post the GUESS CHAT announcement ---

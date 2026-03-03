@@ -122,6 +122,7 @@ class TestCheckModAndAnnounce:
         assert saved_state["last_announced_topic"] == "Movies"
 
     @pytest.mark.asyncio
+    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)
     @patch("weekly_slides_bot.save_state")
     @patch("weekly_slides_bot.load_state", return_value={"last_announced_topic": "Favourite Food"})
     async def test_skips_already_announced_topic(self, _load, mock_save):
@@ -130,13 +131,62 @@ class TestCheckModAndAnnounce:
         mock_channel.topic = "Current Guess Chat: Favourite Food"
         mock_channel.send = AsyncMock()
 
+        mock_mod_channel = MagicMock()
+        mock_mod_channel.send = AsyncMock()
+
         mock_client = MagicMock()
-        mock_client.get_channel.return_value = mock_channel
+        mock_client.get_channel.side_effect = lambda cid: {
+            1: mock_channel,
+            3: mock_mod_channel,
+        }.get(cid)
 
         await check_mod_and_announce(mock_client)
 
         mock_channel.send.assert_not_called()
         mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)
+    @patch("weekly_slides_bot.save_state")
+    @patch("weekly_slides_bot.load_state", return_value={"last_announced_topic": "Old Topic"})
+    async def test_sends_reminder_when_topic_unchanged(self, _load, _save):
+        """When topic hasn't changed, send a reminder to the mod channel."""
+        mock_channel = MagicMock()
+        mock_channel.topic = "Current Guess Chat: Old Topic"
+        mock_channel.send = AsyncMock()
+
+        mock_mod_channel = MagicMock()
+        mock_mod_channel.send = AsyncMock()
+
+        mock_client = MagicMock()
+        mock_client.get_channel.side_effect = lambda cid: {
+            1: mock_channel,
+            3: mock_mod_channel,
+        }.get(cid)
+
+        await check_mod_and_announce(mock_client)
+
+        mock_mod_channel.send.assert_called_once_with(
+            "@Mods we haven't announced a new guess chat yet, is there a new one this week?"
+        )
+        mock_channel.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", None)
+    @patch("weekly_slides_bot.save_state")
+    @patch("weekly_slides_bot.load_state", return_value={"last_announced_topic": "Old Topic"})
+    async def test_no_reminder_when_mod_channel_not_configured(self, _load, _save):
+        """When DISCORD_MOD_CHANNEL_ID is not set, no reminder is sent."""
+        mock_channel = MagicMock()
+        mock_channel.topic = "Current Guess Chat: Old Topic"
+        mock_channel.send = AsyncMock()
+
+        mock_client = MagicMock()
+        mock_client.get_channel.return_value = mock_channel
+
+        # Should not raise
+        await check_mod_and_announce(mock_client)
+        mock_channel.send.assert_not_called()
 
     @pytest.mark.asyncio
     @patch("weekly_slides_bot.save_state")
@@ -153,172 +203,6 @@ class TestCheckModAndAnnounce:
         await check_mod_and_announce(mock_client)
 
         mock_channel.send.assert_called_once_with("GUESS CHAT New Topic")
-
-
-class TestFridayReminder:
-    """Tests that generate_slides sends a reminder when the topic hasn't changed."""
-
-    @staticmethod
-    def _make_client(marker_msg, sub_msg, mod_channel=None, channel_topic=""):
-        """Build a mock client with a bot user ID of 42."""
-        bot_user = MagicMock()
-        bot_user.id = 42
-
-        call_count = 0
-
-        async def history_side_effect(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                yield marker_msg
-            else:
-                yield sub_msg
-
-        mock_channel = MagicMock()
-        mock_channel.history = history_side_effect
-        mock_channel.guild = MagicMock()
-        mock_channel.guild.id = 12345
-        mock_channel.topic = channel_topic
-
-        mock_results_channel = MagicMock()
-        mock_results_channel.send = AsyncMock()
-
-        def get_channel(cid):
-            if cid == 1:
-                return mock_channel
-            if cid == 2:
-                return mock_results_channel
-            if cid == 3 and mod_channel is not None:
-                return mod_channel
-            return None
-
-        mock_client = MagicMock()
-        mock_client.user = bot_user
-        mock_client.get_channel.side_effect = get_channel
-        return mock_client, mock_results_channel, mod_channel
-
-    @pytest.mark.asyncio
-    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)
-    @patch("weekly_slides_bot.save_state")
-    @patch("weekly_slides_bot.build_deck", return_value=[])
-    @patch("weekly_slides_bot.share_presentation")
-    @patch("weekly_slides_bot.copy_presentation", return_value="pres_id")
-    @patch("weekly_slides_bot.get_google_services", return_value=(MagicMock(), MagicMock()))
-    @patch("weekly_slides_bot.load_state", return_value={"topic": "Old Topic"})
-    async def test_sends_reminder_when_topic_unchanged(
-        self, _load, _gcs, _copy, _share, _build, _save
-    ):
-        """When channel description topic matches last known topic, remind mods."""
-        from weekly_slides_bot import generate_slides
-
-        marker_msg = MagicMock()
-        marker_msg.id = 100
-        marker_msg.content = "GUESS CHAT Old Topic"
-        marker_msg.author = MagicMock()
-        marker_msg.author.id = 42  # bot's own message
-
-        sub_msg = MagicMock()
-        sub_msg.id = 200
-        sub_msg.content = "SUBMISSION answer"
-        sub_msg.attachments = []
-        sub_msg.author = MagicMock()
-        sub_msg.author.id = 999
-        sub_msg.author.display_name = "User"
-        sub_msg.guild = MagicMock()
-        sub_msg.guild.get_member.return_value = MagicMock(display_name="User")
-
-        mock_mod_channel = MagicMock()
-        mock_mod_channel.send = AsyncMock()
-
-        mock_client, _, _ = self._make_client(
-            marker_msg, sub_msg,
-            mod_channel=mock_mod_channel,
-            channel_topic="Current Guess Chat: Old Topic",
-        )
-        await generate_slides(mock_client)
-
-        mock_mod_channel.send.assert_called_once_with(
-            "@Mods we haven't announced a new guess chat yet, is there a new one this week?"
-        )
-
-    @pytest.mark.asyncio
-    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)
-    @patch("weekly_slides_bot.save_state")
-    @patch("weekly_slides_bot.build_deck", return_value=[])
-    @patch("weekly_slides_bot.share_presentation")
-    @patch("weekly_slides_bot.copy_presentation", return_value="pres_id")
-    @patch("weekly_slides_bot.get_google_services", return_value=(MagicMock(), MagicMock()))
-    @patch("weekly_slides_bot.load_state", return_value={"topic": "Old Topic"})
-    async def test_no_reminder_when_topic_changed(
-        self, _load, _gcs, _copy, _share, _build, _save
-    ):
-        """When channel description topic differs from last known, no reminder sent."""
-        from weekly_slides_bot import generate_slides
-
-        marker_msg = MagicMock()
-        marker_msg.id = 100
-        marker_msg.content = "GUESS CHAT New Topic"
-        marker_msg.author = MagicMock()
-        marker_msg.author.id = 42
-
-        sub_msg = MagicMock()
-        sub_msg.id = 200
-        sub_msg.content = "SUBMISSION answer"
-        sub_msg.attachments = []
-        sub_msg.author = MagicMock()
-        sub_msg.author.id = 999
-        sub_msg.author.display_name = "User"
-        sub_msg.guild = MagicMock()
-        sub_msg.guild.get_member.return_value = MagicMock(display_name="User")
-
-        mock_mod_channel = MagicMock()
-        mock_mod_channel.send = AsyncMock()
-
-        mock_client, _, _ = self._make_client(
-            marker_msg, sub_msg,
-            mod_channel=mock_mod_channel,
-            channel_topic="Current Guess Chat: New Topic",
-        )
-        await generate_slides(mock_client)
-
-        mock_mod_channel.send.assert_not_called()
-
-    @pytest.mark.asyncio
-    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", None)
-    @patch("weekly_slides_bot.save_state")
-    @patch("weekly_slides_bot.build_deck", return_value=[])
-    @patch("weekly_slides_bot.share_presentation")
-    @patch("weekly_slides_bot.copy_presentation", return_value="pres_id")
-    @patch("weekly_slides_bot.get_google_services", return_value=(MagicMock(), MagicMock()))
-    @patch("weekly_slides_bot.load_state", return_value={"topic": "Old Topic"})
-    async def test_no_reminder_when_mod_channel_not_configured(
-        self, _load, _gcs, _copy, _share, _build, _save
-    ):
-        """When DISCORD_MOD_CHANNEL_ID is not set, no reminder is sent."""
-        from weekly_slides_bot import generate_slides
-
-        marker_msg = MagicMock()
-        marker_msg.id = 100
-        marker_msg.content = "GUESS CHAT Old Topic"
-        marker_msg.author = MagicMock()
-        marker_msg.author.id = 42
-
-        sub_msg = MagicMock()
-        sub_msg.id = 200
-        sub_msg.content = "SUBMISSION answer"
-        sub_msg.attachments = []
-        sub_msg.author = MagicMock()
-        sub_msg.author.id = 999
-        sub_msg.author.display_name = "User"
-        sub_msg.guild = MagicMock()
-        sub_msg.guild.get_member.return_value = MagicMock(display_name="User")
-
-        mock_client, _, _ = self._make_client(
-            marker_msg, sub_msg,
-            channel_topic="Current Guess Chat: Old Topic",
-        )
-        # Should not raise even without mod channel
-        await generate_slides(mock_client)
 
 
 class TestBotOnlyMarkerFilter:

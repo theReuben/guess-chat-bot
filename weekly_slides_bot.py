@@ -1102,14 +1102,27 @@ async def generate_slides(client: discord.Client) -> None:
         processed_ids.add(sub["id"])
 
     # Post results
-    results_channel = client.get_channel(DISCORD_RESULTS_CHANNEL_ID)
-    if results_channel is None:
-        print(f"[error] Could not find results channel {DISCORD_RESULTS_CHANNEL_ID}")
+    # In preview mode the message goes to the mod channel for a sanity check
+    # before the public Friday post; in normal slides mode it goes to the
+    # public results channel.
+    if BOT_MODE == "preview":
+        if DISCORD_MOD_CHANNEL_ID is None:
+            print("[error] Preview mode requires DISCORD_MOD_CHANNEL_ID to be set; skipping post.")
+            post_channel = None
+        else:
+            post_channel = client.get_channel(DISCORD_MOD_CHANNEL_ID)
+            if post_channel is None:
+                print(f"[error] Could not find mod channel {DISCORD_MOD_CHANNEL_ID}")
     else:
+        post_channel = client.get_channel(DISCORD_RESULTS_CHANNEL_ID)
+        if post_channel is None:
+            print(f"[error] Could not find results channel {DISCORD_RESULTS_CHANNEL_ID}")
+
+    if post_channel is not None:
         named_url = presentation_url(named_pres_id)
         anon_url = presentation_url(anon_pres_id)
         msg_text = format_results_message(topic, all_submissions, named_url, anon_url)
-        await results_channel.send(msg_text)
+        await post_channel.send(msg_text)
         print("[info] Posted results message.")
 
         # Send error notifications for processing issues
@@ -1117,9 +1130,9 @@ async def generate_slides(client: discord.Client) -> None:
         if DISCORD_MOD_CHANNEL_ID is not None:
             error_channel = client.get_channel(DISCORD_MOD_CHANNEL_ID)
             if error_channel is None:
-                print(f"[warn] Could not find mod channel {DISCORD_MOD_CHANNEL_ID}; falling back to results channel")
+                print(f"[warn] Could not find mod channel {DISCORD_MOD_CHANNEL_ID}; falling back to post channel")
         if error_channel is None:
-            error_channel = results_channel
+            error_channel = post_channel
         guild_id = channel.guild.id if channel.guild else None
         for err in errors:
             s_url = slide_url(named_pres_id, err.get("slide_id", ""))
@@ -1236,7 +1249,10 @@ class OneShotClient(discord.Client):
         try:
             if BOT_MODE == "announce":
                 await check_mod_and_announce(self)
+            elif BOT_MODE in ("slides", "preview"):
+                await generate_slides(self)
             else:
+                print(f"[warn] Unknown BOT_MODE '{BOT_MODE}'; proceeding with generate_slides.")
                 await generate_slides(self)
         finally:
             await self.close()

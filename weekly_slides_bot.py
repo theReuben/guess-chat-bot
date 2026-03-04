@@ -42,7 +42,6 @@ GOOGLE_CREDS_FILE = os.environ.get("GOOGLE_CREDS_FILE", "service_account.json")
 DRIVE_FOLDER_ID = os.environ.get("DRIVE_FOLDER_ID")
 STATE_FILE = os.environ.get("STATE_FILE", "state.json")
 TEMPLATE_DECK_ID = os.environ["TEMPLATE_DECK_ID"]
-MOD_ROLE_NAME = os.environ.get("MOD_ROLE_NAME", "Mod")
 
 MARKER_PREFIX = "GUESS CHAT"
 SUBMISSION_PREFIX = "SUBMISSION"
@@ -61,6 +60,49 @@ _YOUTUBE_URL_RE = re.compile(
     r"(?P<id>[A-Za-z0-9_-]{11})"
     r"[^\s]*",
 )
+
+
+# Regex to parse the channel description/topic set by moderators.
+# Expected format: "Current Guess Chat: <topic>"
+_CHANNEL_TOPIC_RE = re.compile(r"Current\s+Guess\s+Chat:\s*(.+)", re.IGNORECASE)
+
+
+# ---------------------------------------------------------------------------
+# Topic extraction
+# ---------------------------------------------------------------------------
+
+
+def extract_topic(content: str) -> str:
+    """Extract the topic from a GUESS CHAT message.
+
+    Handles both ``GUESS CHAT Topic`` on one line and multi-line formats
+    like ``# GUESS CHAT\\n# Topic``.  Returns ``"Unknown"`` when no topic
+    text can be found.
+    """
+    first_line = content.split("\n", 1)[0]
+    marker_match = _MARKER_LINE_RE.match(first_line)
+    topic = marker_match.group(2).strip() if marker_match and marker_match.group(2).strip() else ""
+    if not topic:
+        for line in content.split("\n")[1:]:
+            candidate = _MD_PREFIX_RE.sub("", line).strip()
+            if candidate:
+                topic = candidate
+                break
+    if not topic:
+        topic = "Unknown"
+    return topic
+
+
+def parse_channel_topic(description: str | None) -> str | None:
+    """Parse the topic from a channel description.
+
+    Returns the topic string if the description matches
+    ``Current Guess Chat: <topic>``, otherwise ``None``.
+    """
+    if not description or not isinstance(description, str):
+        return None
+    m = _CHANNEL_TOPIC_RE.match(description.strip())
+    return m.group(1).strip() if m else None
 
 
 # ---------------------------------------------------------------------------
@@ -946,31 +988,31 @@ async def generate_slides(client: discord.Client) -> None:
         return
 
     # --- Find the most recent GUESS CHAT marker ---
+    # Prefer a marker posted by the bot itself.  Fall back to *any* GUESS CHAT
+    # marker so that legacy mod-posted markers still work this week.
+    # TODO: remove the legacy fallback once the bot has posted its own marker.
     marker_msg = None
+    fallback_marker_msg = None
+    bot_user_id = client.user.id if client.user else None
     async for msg in channel.history(limit=500):
         first_line = msg.content.split("\n", 1)[0]
         if _MARKER_LINE_RE.match(first_line):
-            marker_msg = msg
-            break
+            if bot_user_id is not None and msg.author.id == bot_user_id:
+                marker_msg = msg
+                break
+            if fallback_marker_msg is None:
+                fallback_marker_msg = msg
+
+    if marker_msg is None and fallback_marker_msg is not None:
+        marker_msg = fallback_marker_msg
+        print("[info] Using non-bot GUESS CHAT marker as fallback.")
 
     if marker_msg is None:
         print("[info] No GUESS CHAT marker found; nothing to do.")
         return
 
     marker_id = str(marker_msg.id)
-    # Extract topic: everything after "GUESS CHAT" on the first line,
-    # or the first non-empty line after it (handles "# GUESS CHAT\n# TOPIC").
-    first_line = marker_msg.content.split("\n", 1)[0]
-    marker_match = _MARKER_LINE_RE.match(first_line)
-    topic = marker_match.group(2).strip() if marker_match and marker_match.group(2).strip() else ""
-    if not topic:
-        for line in marker_msg.content.split("\n")[1:]:
-            candidate = _MD_PREFIX_RE.sub("", line).strip()
-            if candidate:
-                topic = candidate
-                break
-    if not topic:
-        topic = "Unknown"
+    topic = extract_topic(marker_msg.content)
 
     # --- Collect SUBMISSION messages after the marker ---
     all_submissions: list[dict] = []
@@ -1095,7 +1137,7 @@ async def generate_slides(client: discord.Client) -> None:
         if errors:
             print(f"[info] Sent {len(errors)} error notification(s).")
 
-    # Persist state (preserve keys written by other modes, e.g. last_announced_mod_msg_id)
+    # Persist state (preserve keys written by other modes, e.g. last_announced_topic)
     prev_state = load_state()
     prev_state.update({
         "marker_id": marker_id,
@@ -1110,76 +1152,75 @@ async def generate_slides(client: discord.Client) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Mod-channel announcement flow
+# Channel-description announcement flow
 # ---------------------------------------------------------------------------
 
 
-def _has_mod_role(member: discord.Member) -> bool:
-    """Return True if *member* has a role named ``MOD_ROLE_NAME``."""
-    return any(role.name == MOD_ROLE_NAME for role in member.roles)
-
-
 async def check_mod_and_announce(client: discord.Client) -> None:
-    """Read the mod channel for a GUESS CHAT announcement and post it to the submissions channel.
+    """Read the submissions channel description for a new Guess Chat topic and post the announcement.
 
-    Only messages authored by members with the *Mod* role are considered.
-    The most recent matching message is used.
+    The channel description is expected to follow the format
+    ``Current Guess Chat: <topic>``.  If the topic differs from the last
+    announced topic (stored in state), the bot posts a ``GUESS CHAT <topic>``
+    message in the submissions channel.  If the topic is unchanged, a reminder
+    is sent to the mod channel.
     """
-    if DISCORD_MOD_CHANNEL_ID is None:
-        print("[error] DISCORD_MOD_CHANNEL_ID is not set; cannot check mod channel.")
-        return
-
-    mod_channel = client.get_channel(DISCORD_MOD_CHANNEL_ID)
-    if mod_channel is None:
-        print(f"[error] Could not find mod channel {DISCORD_MOD_CHANNEL_ID}")
-        return
-
-    # Search for the most recent GUESS CHAT announcement from a Mod
-    announcement_msg = None
-    async for msg in mod_channel.history(limit=500):
-        # Only consider messages from members with the Mod role.
-        # msg.author may be a discord.User if the member is not cached; try to resolve it.
-        member: discord.Member | None
-        if isinstance(msg.author, discord.Member):
-            member = msg.author
-        else:
-            if msg.guild is None:
-                continue
-            try:
-                member = await msg.guild.fetch_member(msg.author.id)
-            except (discord.NotFound, discord.HTTPException):
-                member = None
-
-        if member is None:
-            continue
-        if not _has_mod_role(member):
-            continue
-        first_line = msg.content.split("\n", 1)[0]
-        if _MARKER_LINE_RE.match(first_line):
-            announcement_msg = msg
-            break
-
-    if announcement_msg is None:
-        print("[info] No GUESS CHAT announcement from a Mod found in the mod channel.")
-        return
-
-    # Check if we already forwarded this announcement
-    state = load_state()
-    if str(announcement_msg.id) == state.get("last_announced_mod_msg_id"):
-        print("[info] Already announced this mod message; nothing to do.")
-        return
-
-    # Post the announcement in the submissions (guess chat) channel
+    # --- Read the submissions channel description ---
     submissions_channel = client.get_channel(DISCORD_CHANNEL_ID)
     if submissions_channel is None:
         print(f"[error] Could not find submissions channel {DISCORD_CHANNEL_ID}")
         return
 
-    await submissions_channel.send(announcement_msg.content)
-    print(f"[info] Forwarded GUESS CHAT announcement to submissions channel.")
+    description = getattr(submissions_channel, "topic", "") or ""
+    topic = parse_channel_topic(description)
+    if topic is None:
+        print("[info] Channel description does not contain a Guess Chat topic; nothing to do.")
+        return
 
-    # Persist the announced message ID to avoid re-announcing
-    state["last_announced_mod_msg_id"] = str(announcement_msg.id)
+    # --- Check whether this topic has already been announced ---
+    state = load_state()
+    if topic == state.get("last_announced_topic"):
+        print("[info] Topic unchanged; already announced.")
+        # Send a reminder to the mod channel asking if there's a new topic.
+        if DISCORD_MOD_CHANNEL_ID is not None:
+            mod_channel = client.get_channel(DISCORD_MOD_CHANNEL_ID)
+            if mod_channel is not None:
+                await mod_channel.send(
+                    "@Mods we haven't announced a new guess chat yet, is there a new one this week?"
+                )
+                print("[info] Sent reminder to mod channel about missing new topic.")
+            else:
+                print(f"[warn] Could not find mod channel {DISCORD_MOD_CHANNEL_ID}")
+        return
+
+    # --- Post the GUESS CHAT announcement ---
+    posted_msg = await submissions_channel.send(f"GUESS CHAT {topic}")
+    print(f"[info] Posted GUESS CHAT announcement for topic '{topic}'.")
+
+    # --- Send confirmation to mod channel ---
+    if DISCORD_MOD_CHANNEL_ID is not None:
+        mod_channel = client.get_channel(DISCORD_MOD_CHANNEL_ID)
+        if mod_channel is not None:
+            guild = getattr(submissions_channel, "guild", None)
+            guild_id = guild.id if guild is not None else None
+            if guild_id is not None:
+                msg_url = discord_message_url(guild_id, DISCORD_CHANNEL_ID, str(posted_msg.id))
+                await mod_channel.send(
+                    f"@Mods New Guess Chat theme: **{topic}**\n"
+                    f"Are there any extras we should add?\n"
+                    f"{msg_url}"
+                )
+            else:
+                await mod_channel.send(
+                    f"@Mods New Guess Chat theme: **{topic}**\n"
+                    f"Are there any extras we should add?"
+                )
+            print("[info] Sent confirmation to mod channel.")
+        else:
+            print(f"[warn] Could not find mod channel {DISCORD_MOD_CHANNEL_ID}")
+
+    # Persist the announced topic to avoid re-announcing
+    state["last_announced_topic"] = topic
     await asyncio.to_thread(save_state, state)
     print("[info] State saved (announcement tracked).")
 

@@ -1,4 +1,4 @@
-"""Tests for mod-channel announcement flow and error routing."""
+"""Tests for channel-description announcement flow, reminder logic, and error routing."""
 
 from __future__ import annotations
 
@@ -14,321 +14,391 @@ os.environ.setdefault("DISCORD_RESULTS_CHANNEL_ID", "2")
 os.environ.setdefault("TEMPLATE_DECK_ID", "tpl")
 
 import discord
-from weekly_slides_bot import _has_mod_role, check_mod_and_announce
+from weekly_slides_bot import (
+    check_mod_and_announce,
+    extract_topic,
+    parse_channel_topic,
+)
 
 
-class TestHasModRole:
-    """Tests for the _has_mod_role helper."""
+class TestExtractTopic:
+    """Tests for the extract_topic helper."""
 
-    def test_returns_true_when_member_has_mod_role(self):
-        role = MagicMock()
-        role.name = "Mod"
-        member = MagicMock(spec=discord.Member)
-        member.roles = [MagicMock(name="@everyone"), role]
-        assert _has_mod_role(member) is True
+    def test_topic_on_same_line(self):
+        assert extract_topic("GUESS CHAT Favourite Food") == "Favourite Food"
 
-    def test_returns_false_when_member_lacks_mod_role(self):
-        role = MagicMock()
-        role.name = "Regular"
-        member = MagicMock(spec=discord.Member)
-        member.roles = [role]
-        assert _has_mod_role(member) is False
+    def test_topic_on_next_line_with_heading(self):
+        assert extract_topic("# GUESS CHAT\n# DnD Characters") == "DnD Characters"
 
-    def test_returns_false_for_empty_roles(self):
-        member = MagicMock(spec=discord.Member)
-        member.roles = []
-        assert _has_mod_role(member) is False
+    def test_unknown_when_no_topic(self):
+        assert extract_topic("GUESS CHAT") == "Unknown"
 
-    def test_case_sensitive(self):
-        role = MagicMock()
-        role.name = "mod"
-        member = MagicMock(spec=discord.Member)
-        member.roles = [role]
-        assert _has_mod_role(member) is False
+    def test_heading_marker_with_topic_on_same_line(self):
+        assert extract_topic("# GUESS CHAT DnD Characters") == "DnD Characters"
+
+    def test_strips_markdown_from_second_line(self):
+        assert extract_topic("# GUESS CHAT\n# LEAST FAVE POKEMON\n- @everyone") == "LEAST FAVE POKEMON"
+
+
+class TestParseChannelTopic:
+    """Tests for the parse_channel_topic helper."""
+
+    def test_parses_standard_format(self):
+        assert parse_channel_topic("Current Guess Chat: dnd character") == "dnd character"
+
+    def test_parses_with_extra_spaces(self):
+        assert parse_channel_topic("Current  Guess  Chat:   pizza ") == "pizza"
+
+    def test_returns_none_for_empty_string(self):
+        assert parse_channel_topic("") is None
+
+    def test_returns_none_for_unrelated_text(self):
+        assert parse_channel_topic("Welcome to the server!") is None
+
+    def test_case_insensitive(self):
+        assert parse_channel_topic("current guess chat: Movies") == "Movies"
+
+    def test_returns_none_for_none_input(self):
+        assert parse_channel_topic(None) is None
 
 
 class TestCheckModAndAnnounce:
-    """Tests for the check_mod_and_announce function."""
+    """Tests for the channel-description based check_mod_and_announce function."""
 
     @pytest.mark.asyncio
-    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", None)
-    async def test_exits_when_mod_channel_not_configured(self):
-        """Should return immediately if mod channel ID is not set."""
-        mock_client = MagicMock()
-        await check_mod_and_announce(mock_client)
-        mock_client.get_channel.assert_not_called()
-
-    @pytest.mark.asyncio
-    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)
-    async def test_exits_when_mod_channel_not_found(self):
-        """Should return if the mod channel cannot be resolved."""
+    async def test_exits_when_submissions_channel_not_found(self):
+        """Should return immediately if submissions channel cannot be resolved."""
         mock_client = MagicMock()
         mock_client.get_channel.return_value = None
         await check_mod_and_announce(mock_client)
-        mock_client.get_channel.assert_called_once_with(3)
 
     @pytest.mark.asyncio
-    @patch("weekly_slides_bot.save_state")
     @patch("weekly_slides_bot.load_state", return_value={})
-    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)
-    async def test_forwards_announcement_to_submissions_channel(self, _load, _save):
-        """When a Mod posts GUESS CHAT, the message is forwarded to the submissions channel."""
-        mod_role = MagicMock()
-        mod_role.name = "Mod"
-
-        mod_author = MagicMock(spec=discord.Member)
-        mod_author.roles = [mod_role]
-
-        mod_msg = MagicMock()
-        mod_msg.id = 500
-        mod_msg.content = "GUESS CHAT Favourite Food\nSubmit your favourite food with an image!"
-        mod_msg.author = mod_author
-
-        async def mod_history(*args, **kwargs):
-            yield mod_msg
-
-        mock_mod_channel = MagicMock()
-        mock_mod_channel.history = mod_history
-
-        mock_submissions_channel = MagicMock()
-        mock_submissions_channel.send = AsyncMock()
+    async def test_exits_when_no_topic_in_description(self, _load):
+        """Should return if the channel description doesn't contain a topic."""
+        mock_channel = MagicMock()
+        mock_channel.topic = "Welcome to the server!"
+        mock_channel.send = AsyncMock()
 
         mock_client = MagicMock()
-        mock_client.get_channel.side_effect = lambda cid: {
-            3: mock_mod_channel,
-            1: mock_submissions_channel,
-        }.get(cid)
+        mock_client.get_channel.return_value = mock_channel
 
         await check_mod_and_announce(mock_client)
 
-        mock_submissions_channel.send.assert_called_once_with(
-            "GUESS CHAT Favourite Food\nSubmit your favourite food with an image!"
-        )
+        mock_channel.send.assert_not_called()
 
     @pytest.mark.asyncio
     @patch("weekly_slides_bot.save_state")
     @patch("weekly_slides_bot.load_state", return_value={})
-    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)
-    async def test_saves_announced_message_id(self, _load, mock_save):
-        """After forwarding, the mod message ID is persisted in state."""
-        mod_role = MagicMock()
-        mod_role.name = "Mod"
-
-        mod_author = MagicMock(spec=discord.Member)
-        mod_author.roles = [mod_role]
-
-        mod_msg = MagicMock()
-        mod_msg.id = 500
-        mod_msg.content = "GUESS CHAT Topic"
-        mod_msg.author = mod_author
-
-        async def mod_history(*args, **kwargs):
-            yield mod_msg
-
-        mock_mod_channel = MagicMock()
-        mock_mod_channel.history = mod_history
-
-        mock_submissions_channel = MagicMock()
-        mock_submissions_channel.send = AsyncMock()
+    async def test_posts_announcement_for_new_topic(self, _load, _save):
+        """When channel description has a new topic, post GUESS CHAT message."""
+        mock_channel = MagicMock()
+        mock_channel.topic = "Current Guess Chat: Favourite Food"
+        mock_channel.send = AsyncMock()
 
         mock_client = MagicMock()
-        mock_client.get_channel.side_effect = lambda cid: {
-            3: mock_mod_channel,
-            1: mock_submissions_channel,
-        }.get(cid)
+        mock_client.get_channel.return_value = mock_channel
+
+        await check_mod_and_announce(mock_client)
+
+        mock_channel.send.assert_called_once_with("GUESS CHAT Favourite Food")
+
+    @pytest.mark.asyncio
+    @patch("weekly_slides_bot.save_state")
+    @patch("weekly_slides_bot.load_state", return_value={})
+    async def test_saves_announced_topic(self, _load, mock_save):
+        """After posting, the topic is persisted in state."""
+        mock_channel = MagicMock()
+        mock_channel.topic = "Current Guess Chat: Movies"
+        mock_channel.send = AsyncMock()
+
+        mock_client = MagicMock()
+        mock_client.get_channel.return_value = mock_channel
 
         await check_mod_and_announce(mock_client)
 
         mock_save.assert_called_once()
         saved_state = mock_save.call_args.args[0]
-        assert saved_state["last_announced_mod_msg_id"] == "500"
+        assert saved_state["last_announced_topic"] == "Movies"
 
     @pytest.mark.asyncio
-    @patch("weekly_slides_bot.save_state")
-    @patch("weekly_slides_bot.load_state", return_value={"last_announced_mod_msg_id": "500"})
     @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)
-    async def test_skips_already_announced_message(self, _load, mock_save):
-        """Should not re-forward a message that was already announced."""
-        mod_role = MagicMock()
-        mod_role.name = "Mod"
-
-        mod_author = MagicMock(spec=discord.Member)
-        mod_author.roles = [mod_role]
-
-        mod_msg = MagicMock()
-        mod_msg.id = 500
-        mod_msg.content = "GUESS CHAT Topic"
-        mod_msg.author = mod_author
-
-        async def mod_history(*args, **kwargs):
-            yield mod_msg
+    @patch("weekly_slides_bot.save_state")
+    @patch("weekly_slides_bot.load_state", return_value={"last_announced_topic": "Favourite Food"})
+    async def test_skips_already_announced_topic(self, _load, mock_save):
+        """Should not re-post if the topic hasn't changed."""
+        mock_channel = MagicMock()
+        mock_channel.topic = "Current Guess Chat: Favourite Food"
+        mock_channel.send = AsyncMock()
 
         mock_mod_channel = MagicMock()
-        mock_mod_channel.history = mod_history
-
-        mock_submissions_channel = MagicMock()
-        mock_submissions_channel.send = AsyncMock()
+        mock_mod_channel.send = AsyncMock()
 
         mock_client = MagicMock()
         mock_client.get_channel.side_effect = lambda cid: {
+            1: mock_channel,
             3: mock_mod_channel,
-            1: mock_submissions_channel,
         }.get(cid)
 
         await check_mod_and_announce(mock_client)
 
-        mock_submissions_channel.send.assert_not_called()
+        mock_channel.send.assert_not_called()
         mock_save.assert_not_called()
 
     @pytest.mark.asyncio
-    @patch("weekly_slides_bot.save_state")
-    @patch("weekly_slides_bot.load_state", return_value={})
     @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)
-    async def test_ignores_non_mod_messages(self, _load, _save):
-        """Only messages from members with the Mod role should be considered."""
-        regular_role = MagicMock()
-        regular_role.name = "Regular"
-
-        regular_author = MagicMock(spec=discord.Member)
-        regular_author.roles = [regular_role]
-
-        regular_msg = MagicMock()
-        regular_msg.id = 600
-        regular_msg.content = "GUESS CHAT Topic"
-        regular_msg.author = regular_author
-
-        async def mod_history(*args, **kwargs):
-            yield regular_msg
+    @patch("weekly_slides_bot.save_state")
+    @patch("weekly_slides_bot.load_state", return_value={"last_announced_topic": "Old Topic"})
+    async def test_sends_reminder_when_topic_unchanged(self, _load, _save):
+        """When topic hasn't changed, send a reminder to the mod channel."""
+        mock_channel = MagicMock()
+        mock_channel.topic = "Current Guess Chat: Old Topic"
+        mock_channel.send = AsyncMock()
 
         mock_mod_channel = MagicMock()
-        mock_mod_channel.history = mod_history
-
-        mock_submissions_channel = MagicMock()
-        mock_submissions_channel.send = AsyncMock()
+        mock_mod_channel.send = AsyncMock()
 
         mock_client = MagicMock()
         mock_client.get_channel.side_effect = lambda cid: {
+            1: mock_channel,
             3: mock_mod_channel,
-            1: mock_submissions_channel,
         }.get(cid)
 
         await check_mod_and_announce(mock_client)
 
-        mock_submissions_channel.send.assert_not_called()
-        _save.assert_not_called()
+        mock_mod_channel.send.assert_called_once_with(
+            "@Mods we haven't announced a new guess chat yet, is there a new one this week?"
+        )
+        mock_channel.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", None)
+    @patch("weekly_slides_bot.save_state")
+    @patch("weekly_slides_bot.load_state", return_value={"last_announced_topic": "Old Topic"})
+    async def test_no_reminder_when_mod_channel_not_configured(self, _load, _save):
+        """When DISCORD_MOD_CHANNEL_ID is not set, no reminder is sent."""
+        mock_channel = MagicMock()
+        mock_channel.topic = "Current Guess Chat: Old Topic"
+        mock_channel.send = AsyncMock()
+
+        mock_client = MagicMock()
+        mock_client.get_channel.return_value = mock_channel
+
+        # Should not raise
+        await check_mod_and_announce(mock_client)
+        mock_channel.send.assert_not_called()
 
     @pytest.mark.asyncio
     @patch("weekly_slides_bot.save_state")
-    @patch("weekly_slides_bot.load_state", return_value={})
+    @patch("weekly_slides_bot.load_state", return_value={"last_announced_topic": "Old Topic"})
+    async def test_announces_when_topic_changes(self, _load, _save):
+        """When topic changes, a new announcement is posted."""
+        mock_channel = MagicMock()
+        mock_channel.topic = "Current Guess Chat: New Topic"
+        mock_channel.send = AsyncMock()
+
+        mock_client = MagicMock()
+        mock_client.get_channel.return_value = mock_channel
+
+        await check_mod_and_announce(mock_client)
+
+        mock_channel.send.assert_called_once_with("GUESS CHAT New Topic")
+
+    @pytest.mark.asyncio
     @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)
-    async def test_ignores_non_marker_messages_from_mods(self, _load, _save):
-        """Mod messages that do not match GUESS CHAT pattern are skipped."""
-        mod_role = MagicMock()
-        mod_role.name = "Mod"
+    @patch("weekly_slides_bot.save_state")
+    @patch("weekly_slides_bot.load_state", return_value={})
+    async def test_sends_confirmation_to_mod_channel(self, _load, _save):
+        """After posting a new announcement, a confirmation is sent to the mod channel."""
+        posted_msg = MagicMock()
+        posted_msg.id = 12345
 
-        mod_author = MagicMock(spec=discord.Member)
-        mod_author.roles = [mod_role]
-
-        mod_msg = MagicMock()
-        mod_msg.id = 700
-        mod_msg.content = "Hey everyone, no guess chat this week"
-        mod_msg.author = mod_author
-
-        async def mod_history(*args, **kwargs):
-            yield mod_msg
+        mock_channel = MagicMock()
+        mock_channel.topic = "Current Guess Chat: Favourite Food"
+        mock_channel.send = AsyncMock(return_value=posted_msg)
+        mock_channel.guild = MagicMock()
+        mock_channel.guild.id = 99999
 
         mock_mod_channel = MagicMock()
-        mock_mod_channel.history = mod_history
-
-        mock_submissions_channel = MagicMock()
-        mock_submissions_channel.send = AsyncMock()
+        mock_mod_channel.send = AsyncMock()
 
         mock_client = MagicMock()
         mock_client.get_channel.side_effect = lambda cid: {
+            1: mock_channel,
             3: mock_mod_channel,
-            1: mock_submissions_channel,
         }.get(cid)
 
         await check_mod_and_announce(mock_client)
 
-        mock_submissions_channel.send.assert_not_called()
-        _save.assert_not_called()
+        mock_mod_channel.send.assert_called_once()
+        confirmation = mock_mod_channel.send.call_args.args[0]
+        assert "@Mods" in confirmation
+        assert "Favourite Food" in confirmation
+        assert "extras" in confirmation.lower()
+        assert "https://discord.com/channels/99999/1/12345" in confirmation
+
+    @pytest.mark.asyncio
+    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", None)
+    @patch("weekly_slides_bot.save_state")
+    @patch("weekly_slides_bot.load_state", return_value={})
+    async def test_no_confirmation_when_mod_channel_not_configured(self, _load, _save):
+        """When DISCORD_MOD_CHANNEL_ID is not set, no confirmation is sent."""
+        posted_msg = MagicMock()
+        posted_msg.id = 12345
+
+        mock_channel = MagicMock()
+        mock_channel.topic = "Current Guess Chat: Movies"
+        mock_channel.send = AsyncMock(return_value=posted_msg)
+
+        mock_client = MagicMock()
+        mock_client.get_channel.return_value = mock_channel
+
+        await check_mod_and_announce(mock_client)
+
+        # Only the GUESS CHAT announcement should be sent, no mod confirmation
+        mock_channel.send.assert_called_once_with("GUESS CHAT Movies")
+
+
+class TestMarkerFallback:
+    """Tests that generate_slides prefers bot markers but falls back to any marker."""
 
     @pytest.mark.asyncio
     @patch("weekly_slides_bot.save_state")
+    @patch("weekly_slides_bot.build_deck", return_value=[])
+    @patch("weekly_slides_bot.share_presentation")
+    @patch("weekly_slides_bot.copy_presentation", return_value="pres_id")
+    @patch("weekly_slides_bot.get_google_services", return_value=(MagicMock(), MagicMock()))
     @patch("weekly_slides_bot.load_state", return_value={})
-    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)
-    async def test_ignores_non_member_authors(self, _load, _save):
-        """Non-Member authors (e.g. User objects) are skipped when fetch_member fails."""
-        # A User (not Member) has no roles
-        user_author = MagicMock(spec=discord.User)
-        user_author.id = 900
+    async def test_falls_back_to_non_bot_marker(
+        self, _load, _gcs, _copy, _share, mock_build, mock_save
+    ):
+        """When no bot-authored marker exists, a legacy non-bot marker is used."""
+        from weekly_slides_bot import generate_slides
 
-        user_msg = MagicMock()
-        user_msg.id = 800
-        user_msg.content = "GUESS CHAT Topic"
-        user_msg.author = user_author
-        user_msg.guild = MagicMock()
-        user_msg.guild.fetch_member = AsyncMock(
-            side_effect=discord.NotFound(MagicMock(), "not found")
+        bot_user = MagicMock()
+        bot_user.id = 42
+
+        # A non-bot user posted a GUESS CHAT message (legacy)
+        user_marker = MagicMock()
+        user_marker.id = 100
+        user_marker.content = "GUESS CHAT LegacyTopic"
+        user_marker.author = MagicMock()
+        user_marker.author.id = 999  # not the bot
+
+        sub_msg = MagicMock()
+        sub_msg.id = 200
+        sub_msg.content = "SUBMISSION answer"
+        sub_msg.attachments = []
+        sub_msg.author = MagicMock()
+        sub_msg.author.id = 888
+        sub_msg.author.display_name = "User"
+        sub_msg.guild = MagicMock()
+        sub_msg.guild.get_member.return_value = MagicMock(display_name="User")
+
+        call_count = 0
+
+        async def history_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                yield user_marker
+            else:
+                yield sub_msg
+
+        mock_channel = MagicMock()
+        mock_channel.history = history_side_effect
+        mock_channel.guild = MagicMock()
+        mock_channel.guild.id = 12345
+        mock_channel.topic = ""
+
+        mock_results_channel = MagicMock()
+        mock_results_channel.send = AsyncMock()
+
+        mock_client = MagicMock()
+        mock_client.user = bot_user
+        mock_client.get_channel.side_effect = lambda cid: (
+            mock_channel if cid == 1 else mock_results_channel
         )
 
-        async def mod_history(*args, **kwargs):
-            yield user_msg
+        await generate_slides(mock_client)
 
-        mock_mod_channel = MagicMock()
-        mock_mod_channel.history = mod_history
-
-        mock_client = MagicMock()
-        mock_client.get_channel.side_effect = lambda cid: {
-            3: mock_mod_channel,
-            1: MagicMock(),
-        }.get(cid)
-
-        await check_mod_and_announce(mock_client)
-
-        _save.assert_not_called()
+        # The legacy marker should have been used — save_state should be called
+        mock_save.assert_called()
+        saved_state = mock_save.call_args.args[0]
+        assert saved_state["marker_id"] == "100"
 
     @pytest.mark.asyncio
     @patch("weekly_slides_bot.save_state")
+    @patch("weekly_slides_bot.build_deck", return_value=[])
+    @patch("weekly_slides_bot.share_presentation")
+    @patch("weekly_slides_bot.copy_presentation", return_value="pres_id")
+    @patch("weekly_slides_bot.get_google_services", return_value=(MagicMock(), MagicMock()))
     @patch("weekly_slides_bot.load_state", return_value={})
-    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)
-    async def test_resolves_user_author_via_fetch_member(self, _load, _save):
-        """When msg.author is a User, the bot resolves to Member via fetch_member."""
-        mod_role = MagicMock()
-        mod_role.name = "Mod"
+    async def test_prefers_bot_marker_over_legacy(
+        self, _load, _gcs, _copy, _share, mock_build, mock_save
+    ):
+        """When both a bot marker and a legacy marker exist, the bot marker wins."""
+        from weekly_slides_bot import generate_slides
 
-        resolved_member = MagicMock(spec=discord.Member)
-        resolved_member.roles = [mod_role]
+        bot_user = MagicMock()
+        bot_user.id = 42
 
-        user_author = MagicMock(spec=discord.User)
-        user_author.id = 900
+        # Legacy non-bot marker (older, appears later in history)
+        legacy_marker = MagicMock()
+        legacy_marker.id = 50
+        legacy_marker.content = "GUESS CHAT OldTopic"
+        legacy_marker.author = MagicMock()
+        legacy_marker.author.id = 999
 
-        user_msg = MagicMock()
-        user_msg.id = 800
-        user_msg.content = "GUESS CHAT Topic"
-        user_msg.author = user_author
-        user_msg.guild = MagicMock()
-        user_msg.guild.fetch_member = AsyncMock(return_value=resolved_member)
+        # Bot-authored marker (newer, appears first in history)
+        bot_marker = MagicMock()
+        bot_marker.id = 100
+        bot_marker.content = "GUESS CHAT NewTopic"
+        bot_marker.author = MagicMock()
+        bot_marker.author.id = 42
 
-        async def mod_history(*args, **kwargs):
-            yield user_msg
+        sub_msg = MagicMock()
+        sub_msg.id = 200
+        sub_msg.content = "SUBMISSION answer"
+        sub_msg.attachments = []
+        sub_msg.author = MagicMock()
+        sub_msg.author.id = 888
+        sub_msg.author.display_name = "User"
+        sub_msg.guild = MagicMock()
+        sub_msg.guild.get_member.return_value = MagicMock(display_name="User")
 
-        mock_mod_channel = MagicMock()
-        mock_mod_channel.history = mod_history
+        call_count = 0
 
-        mock_submissions_channel = MagicMock()
-        mock_submissions_channel.send = AsyncMock()
+        async def history_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # First call: marker scan — bot marker appears first (most recent)
+                yield bot_marker
+                yield legacy_marker
+            else:
+                yield sub_msg
+
+        mock_channel = MagicMock()
+        mock_channel.history = history_side_effect
+        mock_channel.guild = MagicMock()
+        mock_channel.guild.id = 12345
+        mock_channel.topic = ""
+
+        mock_results_channel = MagicMock()
+        mock_results_channel.send = AsyncMock()
 
         mock_client = MagicMock()
-        mock_client.get_channel.side_effect = lambda cid: {
-            3: mock_mod_channel,
-            1: mock_submissions_channel,
-        }.get(cid)
+        mock_client.user = bot_user
+        mock_client.get_channel.side_effect = lambda cid: (
+            mock_channel if cid == 1 else mock_results_channel
+        )
 
-        await check_mod_and_announce(mock_client)
+        await generate_slides(mock_client)
 
-        mock_submissions_channel.send.assert_called_once_with("GUESS CHAT Topic")
+        mock_save.assert_called()
+        saved_state = mock_save.call_args.args[0]
+        assert saved_state["marker_id"] == "100"  # bot marker, not legacy
 
 
 class TestStatePreservation:
@@ -336,6 +406,9 @@ class TestStatePreservation:
 
     @staticmethod
     def _make_client(marker_msg, sub_msg):
+        bot_user = MagicMock()
+        bot_user.id = 42
+
         call_count = 0
 
         async def history_side_effect(*args, **kwargs):
@@ -350,11 +423,13 @@ class TestStatePreservation:
         mock_channel.history = history_side_effect
         mock_channel.guild = MagicMock()
         mock_channel.guild.id = 12345
+        mock_channel.topic = ""
 
         mock_results_channel = MagicMock()
         mock_results_channel.send = AsyncMock()
 
         mock_client = MagicMock()
+        mock_client.user = bot_user
         mock_client.get_channel.side_effect = lambda cid: (
             mock_channel if cid == 1 else mock_results_channel
         )
@@ -366,16 +441,18 @@ class TestStatePreservation:
     @patch("weekly_slides_bot.share_presentation")
     @patch("weekly_slides_bot.copy_presentation", return_value="pres_id")
     @patch("weekly_slides_bot.get_google_services", return_value=(MagicMock(), MagicMock()))
-    @patch("weekly_slides_bot.load_state", return_value={"last_announced_mod_msg_id": "500"})
-    async def test_generate_slides_preserves_announced_mod_msg_id(
+    @patch("weekly_slides_bot.load_state", return_value={"last_announced_topic": "Movies"})
+    async def test_generate_slides_preserves_announced_topic(
         self, _load, _gcs, _copy, _share, _build, mock_save
     ):
-        """generate_slides must not erase last_announced_mod_msg_id from state."""
+        """generate_slides must not erase last_announced_topic from state."""
         from weekly_slides_bot import generate_slides
 
         marker_msg = MagicMock()
         marker_msg.id = 100
         marker_msg.content = "GUESS CHAT Test"
+        marker_msg.author = MagicMock()
+        marker_msg.author.id = 42  # bot's own message
 
         sub_msg = MagicMock()
         sub_msg.id = 200
@@ -392,7 +469,7 @@ class TestStatePreservation:
 
         mock_save.assert_called()
         saved_state = mock_save.call_args.args[0]
-        assert saved_state.get("last_announced_mod_msg_id") == "500"
+        assert saved_state.get("last_announced_topic") == "Movies"
         assert "marker_id" in saved_state
 
 
@@ -401,6 +478,9 @@ class TestErrorRoutingToModChannel:
 
     @staticmethod
     def _make_client(marker_msg, sub_msg, mod_channel_id=None):
+        bot_user = MagicMock()
+        bot_user.id = 42
+
         call_count = 0
 
         async def history_side_effect(*args, **kwargs):
@@ -415,6 +495,7 @@ class TestErrorRoutingToModChannel:
         mock_channel.history = history_side_effect
         mock_channel.guild = MagicMock()
         mock_channel.guild.id = 12345
+        mock_channel.topic = ""
 
         mock_results_channel = MagicMock()
         mock_results_channel.send = AsyncMock()
@@ -432,6 +513,7 @@ class TestErrorRoutingToModChannel:
             return None
 
         mock_client = MagicMock()
+        mock_client.user = bot_user
         mock_client.get_channel.side_effect = get_channel
         return mock_client, mock_results_channel, mock_mod_channel
 
@@ -458,6 +540,8 @@ class TestErrorRoutingToModChannel:
         marker_msg = MagicMock()
         marker_msg.id = 100
         marker_msg.content = "GUESS CHAT Test"
+        marker_msg.author = MagicMock()
+        marker_msg.author.id = 42
 
         sub_msg = MagicMock()
         sub_msg.id = 200
@@ -507,6 +591,8 @@ class TestErrorRoutingToModChannel:
         marker_msg = MagicMock()
         marker_msg.id = 100
         marker_msg.content = "GUESS CHAT Test"
+        marker_msg.author = MagicMock()
+        marker_msg.author.id = 42
 
         sub_msg = MagicMock()
         sub_msg.id = 200

@@ -553,3 +553,157 @@ class TestOneShotClientMode:
         client.on_ready = OneShotClient.on_ready.__get__(client, OneShotClient)
         await client.on_ready()
         mock_announce.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch("weekly_slides_bot.generate_slides", new_callable=AsyncMock)
+    @patch("weekly_slides_bot.BOT_MODE", "preview")
+    async def test_preview_mode_calls_generate_slides(self, mock_gen):
+        """preview mode must call generate_slides (not check_mod_and_announce)."""
+        from weekly_slides_bot import OneShotClient
+        client = MagicMock(spec=OneShotClient)
+        client.close = AsyncMock()
+        client.on_ready = OneShotClient.on_ready.__get__(client, OneShotClient)
+        await client.on_ready()
+        mock_gen.assert_called_once()
+
+
+class TestPreviewModeRouting:
+    """Tests that preview mode routes the results message to the mod channel."""
+
+    @staticmethod
+    def _make_client(marker_msg, sub_msg, mod_channel_id=3):
+        call_count = 0
+
+        async def history_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                yield marker_msg
+            else:
+                yield sub_msg
+
+        mock_channel = MagicMock()
+        mock_channel.history = history_side_effect
+        mock_channel.guild = MagicMock()
+        mock_channel.guild.id = 12345
+
+        mock_results_channel = MagicMock()
+        mock_results_channel.send = AsyncMock()
+
+        mock_mod_channel = MagicMock()
+        mock_mod_channel.send = AsyncMock()
+
+        def get_channel(cid):
+            if cid == 1:
+                return mock_channel
+            if cid == 2:
+                return mock_results_channel
+            if mod_channel_id is not None and cid == mod_channel_id:
+                return mock_mod_channel
+            return None
+
+        mock_client = MagicMock()
+        mock_client.get_channel.side_effect = get_channel
+        return mock_client, mock_results_channel, mock_mod_channel
+
+    @pytest.mark.asyncio
+    @patch("weekly_slides_bot.BOT_MODE", "preview")
+    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)
+    @patch("weekly_slides_bot.save_state")
+    @patch("weekly_slides_bot.build_deck", return_value=[])
+    @patch("weekly_slides_bot.share_presentation")
+    @patch("weekly_slides_bot.copy_presentation", return_value="pres_id")
+    @patch("weekly_slides_bot.get_google_services", return_value=(MagicMock(), MagicMock()))
+    @patch("weekly_slides_bot.load_state", return_value={})
+    async def test_preview_posts_to_mod_channel(self, _load, _gcs, _copy, _share, _build, _save):
+        """In preview mode the results message is sent to the mod channel."""
+        from weekly_slides_bot import generate_slides
+
+        marker_msg = MagicMock()
+        marker_msg.id = 100
+        marker_msg.content = "GUESS CHAT Test"
+
+        sub_msg = MagicMock()
+        sub_msg.id = 200
+        sub_msg.content = "SUBMISSION answer"
+        sub_msg.attachments = []
+        sub_msg.author = MagicMock()
+        sub_msg.author.id = 999
+        sub_msg.author.display_name = "User"
+        sub_msg.guild = MagicMock()
+        sub_msg.guild.get_member.return_value = MagicMock(display_name="User")
+
+        mock_client, mock_results_channel, mock_mod_channel = self._make_client(marker_msg, sub_msg)
+        await generate_slides(mock_client)
+
+        # Results message goes to mod channel, not public results channel
+        mock_mod_channel.send.assert_called_once()
+        mock_results_channel.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("weekly_slides_bot.BOT_MODE", "slides")
+    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)
+    @patch("weekly_slides_bot.save_state")
+    @patch("weekly_slides_bot.build_deck", return_value=[])
+    @patch("weekly_slides_bot.share_presentation")
+    @patch("weekly_slides_bot.copy_presentation", return_value="pres_id")
+    @patch("weekly_slides_bot.get_google_services", return_value=(MagicMock(), MagicMock()))
+    @patch("weekly_slides_bot.load_state", return_value={})
+    async def test_slides_mode_still_posts_to_results_channel(self, _load, _gcs, _copy, _share, _build, _save):
+        """In normal slides mode the results message still goes to the results channel."""
+        from weekly_slides_bot import generate_slides
+
+        marker_msg = MagicMock()
+        marker_msg.id = 100
+        marker_msg.content = "GUESS CHAT Test"
+
+        sub_msg = MagicMock()
+        sub_msg.id = 200
+        sub_msg.content = "SUBMISSION answer"
+        sub_msg.attachments = []
+        sub_msg.author = MagicMock()
+        sub_msg.author.id = 999
+        sub_msg.author.display_name = "User"
+        sub_msg.guild = MagicMock()
+        sub_msg.guild.get_member.return_value = MagicMock(display_name="User")
+
+        mock_client, mock_results_channel, mock_mod_channel = self._make_client(marker_msg, sub_msg)
+        await generate_slides(mock_client)
+
+        # Results message goes to public results channel
+        mock_results_channel.send.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch("weekly_slides_bot.BOT_MODE", "preview")
+    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", None)
+    @patch("weekly_slides_bot.save_state")
+    @patch("weekly_slides_bot.build_deck", return_value=[])
+    @patch("weekly_slides_bot.share_presentation")
+    @patch("weekly_slides_bot.copy_presentation", return_value="pres_id")
+    @patch("weekly_slides_bot.get_google_services", return_value=(MagicMock(), MagicMock()))
+    @patch("weekly_slides_bot.load_state", return_value={})
+    async def test_preview_without_mod_channel_skips_post(self, _load, _gcs, _copy, _share, _build, _save):
+        """In preview mode without DISCORD_MOD_CHANNEL_ID nothing is posted."""
+        from weekly_slides_bot import generate_slides
+
+        marker_msg = MagicMock()
+        marker_msg.id = 100
+        marker_msg.content = "GUESS CHAT Test"
+
+        sub_msg = MagicMock()
+        sub_msg.id = 200
+        sub_msg.content = "SUBMISSION answer"
+        sub_msg.attachments = []
+        sub_msg.author = MagicMock()
+        sub_msg.author.id = 999
+        sub_msg.author.display_name = "User"
+        sub_msg.guild = MagicMock()
+        sub_msg.guild.get_member.return_value = MagicMock(display_name="User")
+
+        mock_client, mock_results_channel, mock_mod_channel = self._make_client(
+            marker_msg, sub_msg, mod_channel_id=None
+        )
+        await generate_slides(mock_client)
+
+        mock_results_channel.send.assert_not_called()
+        mock_mod_channel.send.assert_not_called()

@@ -1085,6 +1085,22 @@ async def generate_slides(client: discord.Client) -> None:
             )
 
     if not all_submissions:
+        # In preview mode, re-post the existing deck links from state so
+        # that mods can always verify the preview pipeline is working.
+        if BOT_MODE == "preview" and state.get("named_pres_id"):
+            print("[info] No SUBMISSION messages found — preview mode will re-post existing deck links.")
+            named_pres_id = state["named_pres_id"]
+            anon_pres_id = state["anon_pres_id"]
+            post_topic = state.get("topic", topic)
+            if DISCORD_MOD_CHANNEL_ID is not None:
+                post_channel = client.get_channel(DISCORD_MOD_CHANNEL_ID)
+                if post_channel is not None:
+                    named_url = presentation_url(named_pres_id)
+                    anon_url = presentation_url(anon_pres_id)
+                    msg_text = format_results_message(post_topic, [], named_url, anon_url)
+                    await post_channel.send(msg_text)
+                    print("[info] Posted preview results to mod channel.")
+            return
         print("[info] No SUBMISSION messages found after the marker.")
         return
 
@@ -1114,23 +1130,28 @@ async def generate_slides(client: discord.Client) -> None:
     new_submissions = [s for s in all_submissions if s["id"] not in processed_ids]
 
     if not new_submissions:
-        print("[info] No new submissions since last run; nothing to do.")
-        return
+        if BOT_MODE != "preview":
+            print("[info] No new submissions since last run; nothing to do.")
+            return
+        print("[info] No new submissions — preview mode will still post current results.")
 
-    image_cache: dict[str, str] = {}
+    errors: list[dict] = []
 
-    if new_round:
-        print(f"[info] Building decks for {len(all_submissions)} submission(s).")
-        errors = await asyncio.to_thread(build_deck, slides_svc, drive_svc, named_pres_id, topic, all_submissions, named=True, image_cache=image_cache)
-        await asyncio.to_thread(build_deck, slides_svc, drive_svc, anon_pres_id, topic, all_submissions, named=False, image_cache=image_cache)
-    else:
-        print(f"[info] Appending {len(new_submissions)} new submission(s) to existing decks.")
-        errors = await asyncio.to_thread(append_slides, slides_svc, drive_svc, named_pres_id, new_submissions, named=True, image_cache=image_cache)
-        await asyncio.to_thread(append_slides, slides_svc, drive_svc, anon_pres_id, new_submissions, named=False, image_cache=image_cache)
+    if new_submissions:
+        image_cache: dict[str, str] = {}
 
-    # Update processed IDs
-    for sub in new_submissions:
-        processed_ids.add(sub["id"])
+        if new_round:
+            print(f"[info] Building decks for {len(all_submissions)} submission(s).")
+            errors = await asyncio.to_thread(build_deck, slides_svc, drive_svc, named_pres_id, topic, all_submissions, named=True, image_cache=image_cache)
+            await asyncio.to_thread(build_deck, slides_svc, drive_svc, anon_pres_id, topic, all_submissions, named=False, image_cache=image_cache)
+        else:
+            print(f"[info] Appending {len(new_submissions)} new submission(s) to existing decks.")
+            errors = await asyncio.to_thread(append_slides, slides_svc, drive_svc, named_pres_id, new_submissions, named=True, image_cache=image_cache)
+            await asyncio.to_thread(append_slides, slides_svc, drive_svc, anon_pres_id, new_submissions, named=False, image_cache=image_cache)
+
+        # Update processed IDs
+        for sub in new_submissions:
+            processed_ids.add(sub["id"])
 
     # Post results
     # In preview mode the message goes to the mod channel for a sanity check

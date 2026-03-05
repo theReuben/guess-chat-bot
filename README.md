@@ -200,7 +200,7 @@ To reset state manually, delete or empty `state.json` on the `state` branch, or 
 |---|---|
 | New `GUESS CHAT` marker (different ID) | Creates fresh decks, resets processed IDs |
 | Same marker + new `SUBMISSION` messages | Appends new slides to existing decks |
-| Same marker + no new submissions | Exits early, nothing posted |
+| Same marker + no new submissions | Exits early, nothing posted (in **preview** mode the existing deck links are still posted to the mod channel) |
 | No `GUESS CHAT` marker found | Exits early, nothing posted |
 
 ---

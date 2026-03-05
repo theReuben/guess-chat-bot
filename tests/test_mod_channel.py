@@ -793,3 +793,226 @@ class TestPreviewModeRouting:
 
         mock_results_channel.send.assert_not_called()
         mock_mod_channel.send.assert_not_called()
+
+    # ------------------------------------------------------------------
+    # Preview with no *new* submissions (all already processed)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _make_client_no_new(marker_msg, sub_msg, mod_channel_id=3):
+        """Client whose channel history yields the marker and a submission
+        that is already recorded in processed_ids (simulating no new updates)."""
+        call_count = 0
+
+        async def history_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                yield marker_msg
+            else:
+                yield sub_msg
+
+        mock_channel = MagicMock()
+        mock_channel.history = history_side_effect
+        mock_channel.guild = MagicMock()
+        mock_channel.guild.id = 12345
+
+        mock_results_channel = MagicMock()
+        mock_results_channel.send = AsyncMock()
+
+        mock_mod_channel = MagicMock()
+        mock_mod_channel.send = AsyncMock()
+
+        def get_channel(cid):
+            if cid == 1:
+                return mock_channel
+            if cid == 2:
+                return mock_results_channel
+            if mod_channel_id is not None and cid == mod_channel_id:
+                return mock_mod_channel
+            return None
+
+        mock_client = MagicMock()
+        mock_client.get_channel.side_effect = get_channel
+        return mock_client, mock_results_channel, mock_mod_channel
+
+    @pytest.mark.asyncio
+    @patch("weekly_slides_bot.BOT_MODE", "preview")
+    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)
+    @patch("weekly_slides_bot.save_state")
+    @patch("weekly_slides_bot.share_presentation")
+    @patch("weekly_slides_bot.copy_presentation", return_value="pres_id")
+    @patch("weekly_slides_bot.get_google_services", return_value=(MagicMock(), MagicMock()))
+    @patch(
+        "weekly_slides_bot.load_state",
+        return_value={
+            "marker_id": "100",
+            "named_pres_id": "existing_named",
+            "anon_pres_id": "existing_anon",
+            "processed_ids": ["200"],
+            "topic": "Test",
+        },
+    )
+    async def test_preview_posts_even_when_no_new_submissions(
+        self, _load, _gcs, _copy, _share, _save
+    ):
+        """Preview mode should post to the mod channel even when every
+        submission has already been processed (no new updates)."""
+        from weekly_slides_bot import generate_slides
+
+        marker_msg = MagicMock()
+        marker_msg.id = 100
+        marker_msg.content = "GUESS CHAT Test"
+
+        sub_msg = MagicMock()
+        sub_msg.id = 200
+        sub_msg.content = "SUBMISSION answer"
+        sub_msg.attachments = []
+        sub_msg.author = MagicMock()
+        sub_msg.author.id = 999
+        sub_msg.author.display_name = "User"
+        sub_msg.guild = MagicMock()
+        sub_msg.guild.get_member.return_value = MagicMock(display_name="User")
+
+        mock_client, mock_results_channel, mock_mod_channel = (
+            self._make_client_no_new(marker_msg, sub_msg)
+        )
+        await generate_slides(mock_client)
+
+        mock_mod_channel.send.assert_called_once()
+        mock_results_channel.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("weekly_slides_bot.BOT_MODE", "slides")
+    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)
+    @patch("weekly_slides_bot.save_state")
+    @patch("weekly_slides_bot.share_presentation")
+    @patch("weekly_slides_bot.copy_presentation", return_value="pres_id")
+    @patch("weekly_slides_bot.get_google_services", return_value=(MagicMock(), MagicMock()))
+    @patch(
+        "weekly_slides_bot.load_state",
+        return_value={
+            "marker_id": "100",
+            "named_pres_id": "existing_named",
+            "anon_pres_id": "existing_anon",
+            "processed_ids": ["200"],
+            "topic": "Test",
+        },
+    )
+    async def test_slides_mode_still_exits_when_no_new_submissions(
+        self, _load, _gcs, _copy, _share, _save
+    ):
+        """In normal slides mode the bot should still exit early when there
+        are no new submissions (existing behaviour unchanged)."""
+        from weekly_slides_bot import generate_slides
+
+        marker_msg = MagicMock()
+        marker_msg.id = 100
+        marker_msg.content = "GUESS CHAT Test"
+
+        sub_msg = MagicMock()
+        sub_msg.id = 200
+        sub_msg.content = "SUBMISSION answer"
+        sub_msg.attachments = []
+        sub_msg.author = MagicMock()
+        sub_msg.author.id = 999
+        sub_msg.author.display_name = "User"
+        sub_msg.guild = MagicMock()
+        sub_msg.guild.get_member.return_value = MagicMock(display_name="User")
+
+        mock_client, mock_results_channel, mock_mod_channel = (
+            self._make_client_no_new(marker_msg, sub_msg)
+        )
+        await generate_slides(mock_client)
+
+        mock_results_channel.send.assert_not_called()
+        mock_mod_channel.send.assert_not_called()
+
+    # ------------------------------------------------------------------
+    # Preview with no submissions at all (but existing decks in state)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _make_client_marker_only(marker_msg, mod_channel_id=3):
+        """Client whose channel history yields only the marker (no submissions)."""
+        call_count = 0
+
+        async def history_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                yield marker_msg
+            # second call: no submissions
+
+        mock_channel = MagicMock()
+        mock_channel.history = history_side_effect
+        mock_channel.guild = MagicMock()
+        mock_channel.guild.id = 12345
+
+        mock_results_channel = MagicMock()
+        mock_results_channel.send = AsyncMock()
+
+        mock_mod_channel = MagicMock()
+        mock_mod_channel.send = AsyncMock()
+
+        def get_channel(cid):
+            if cid == 1:
+                return mock_channel
+            if cid == 2:
+                return mock_results_channel
+            if mod_channel_id is not None and cid == mod_channel_id:
+                return mock_mod_channel
+            return None
+
+        mock_client = MagicMock()
+        mock_client.get_channel.side_effect = get_channel
+        return mock_client, mock_results_channel, mock_mod_channel
+
+    @pytest.mark.asyncio
+    @patch("weekly_slides_bot.BOT_MODE", "preview")
+    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)
+    @patch(
+        "weekly_slides_bot.load_state",
+        return_value={
+            "named_pres_id": "existing_named",
+            "anon_pres_id": "existing_anon",
+            "topic": "Old Topic",
+        },
+    )
+    async def test_preview_posts_existing_decks_when_no_submissions(self, _load):
+        """Preview mode should post existing deck links from state even when
+        there are no SUBMISSION messages at all."""
+        from weekly_slides_bot import generate_slides
+
+        marker_msg = MagicMock()
+        marker_msg.id = 100
+        marker_msg.content = "GUESS CHAT Test"
+
+        mock_client, mock_results_channel, mock_mod_channel = (
+            self._make_client_marker_only(marker_msg)
+        )
+        await generate_slides(mock_client)
+
+        mock_mod_channel.send.assert_called_once()
+        mock_results_channel.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("weekly_slides_bot.BOT_MODE", "preview")
+    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)
+    @patch("weekly_slides_bot.load_state", return_value={})
+    async def test_preview_no_submissions_no_state_does_not_post(self, _load):
+        """Preview mode with no submissions and no existing decks in state
+        should not post anything (nothing to show)."""
+        from weekly_slides_bot import generate_slides
+
+        marker_msg = MagicMock()
+        marker_msg.id = 100
+        marker_msg.content = "GUESS CHAT Test"
+
+        mock_client, mock_results_channel, mock_mod_channel = (
+            self._make_client_marker_only(marker_msg)
+        )
+        await generate_slides(mock_client)
+
+        mock_mod_channel.send.assert_not_called()
+        mock_results_channel.send.assert_not_called()

@@ -410,11 +410,11 @@ def _find_body_element(page_elements: list[dict]) -> dict | None:
         return max(candidates, key=_by_area)
 
     # Fallback: largest shape with text that does not start with "Answer:"
-    candidates = [
-        elem for elem in shapes
-        if _get_shape_text(elem).strip()
-        and not _get_shape_text(elem).strip().startswith("Answer:")
-    ]
+    candidates = []
+    for elem in shapes:
+        txt = _get_shape_text(elem).strip()
+        if txt and not txt.startswith("Answer:"):
+            candidates.append(elem)
     if candidates:
         return max(candidates, key=_by_area)
 

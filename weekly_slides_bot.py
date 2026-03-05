@@ -1135,7 +1135,7 @@ async def generate_slides(client: discord.Client) -> None:
             return
         print("[info] No new submissions — preview mode will still post current results.")
 
-    errors: list[dict] = []
+    errors: list[dict] = []  # populated below only when slides are built/appended
 
     if new_submissions:
         image_cache: dict[str, str] = {}

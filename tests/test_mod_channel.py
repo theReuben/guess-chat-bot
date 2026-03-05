@@ -799,7 +799,7 @@ class TestPreviewModeRouting:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _make_client_no_new(marker_msg, sub_msg, mod_channel_id=3):
+    def _make_client_with_processed_submission(marker_msg, sub_msg, mod_channel_id=3):
         """Client whose channel history yields the marker and a submission
         that is already recorded in processed_ids (simulating no new updates)."""
         call_count = 0
@@ -875,7 +875,7 @@ class TestPreviewModeRouting:
         sub_msg.guild.get_member.return_value = MagicMock(display_name="User")
 
         mock_client, mock_results_channel, mock_mod_channel = (
-            self._make_client_no_new(marker_msg, sub_msg)
+            self._make_client_with_processed_submission(marker_msg, sub_msg)
         )
         await generate_slides(mock_client)
 
@@ -921,7 +921,7 @@ class TestPreviewModeRouting:
         sub_msg.guild.get_member.return_value = MagicMock(display_name="User")
 
         mock_client, mock_results_channel, mock_mod_channel = (
-            self._make_client_no_new(marker_msg, sub_msg)
+            self._make_client_with_processed_submission(marker_msg, sub_msg)
         )
         await generate_slides(mock_client)
 
@@ -933,7 +933,7 @@ class TestPreviewModeRouting:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _make_client_marker_only(marker_msg, mod_channel_id=3):
+    def _make_client_with_marker_no_submissions(marker_msg, mod_channel_id=3):
         """Client whose channel history yields only the marker (no submissions)."""
         call_count = 0
 
@@ -989,7 +989,7 @@ class TestPreviewModeRouting:
         marker_msg.content = "GUESS CHAT Test"
 
         mock_client, mock_results_channel, mock_mod_channel = (
-            self._make_client_marker_only(marker_msg)
+            self._make_client_with_marker_no_submissions(marker_msg)
         )
         await generate_slides(mock_client)
 
@@ -1010,7 +1010,7 @@ class TestPreviewModeRouting:
         marker_msg.content = "GUESS CHAT Test"
 
         mock_client, mock_results_channel, mock_mod_channel = (
-            self._make_client_marker_only(marker_msg)
+            self._make_client_with_marker_no_submissions(marker_msg)
         )
         await generate_slides(mock_client)
 

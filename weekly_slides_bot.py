@@ -397,6 +397,24 @@ def _find_body_element(page_elements: list[dict]) -> dict | None:
     )
 
 
+def _find_author_element(page_elements: list[dict]) -> dict | None:
+    """Return the author text box element (shape in the author bar area)."""
+    candidates = [
+        elem for elem in page_elements
+        if elem.get("shape")
+        and elem.get("transform", {}).get("translateY", 0) / _PT < _AUTHOR_BAR_PT - _BODY_Y_TOLERANCE_PT
+    ]
+    if not candidates:
+        return None
+    return max(
+        candidates,
+        key=lambda e: (
+            e.get("size", {}).get("width", {}).get("magnitude", 0)
+            * e.get("size", {}).get("height", {}).get("magnitude", 0)
+        ),
+    )
+
+
 def _body_resize_requests(page_elements: list[dict], has_images: bool) -> list[dict]:
     """Return updatePageElementTransform requests to resize the body text box.
 
@@ -819,8 +837,14 @@ def append_slides(
             s for s in new_pres["slides"] if s["objectId"] == new_slide_id
         )
 
+        page_elements = new_slide.get("pageElements", [])
+        body_elem = _find_body_element(page_elements)
+        author_elem = _find_author_element(page_elements)
+        body_obj_id = body_elem["objectId"] if body_elem else None
+        author_obj_id = author_elem["objectId"] if author_elem else None
+
         clear_requests = []
-        for elem in new_slide.get("pageElements", []):
+        for elem in page_elements:
             shape = elem.get("shape", {})
             if shape.get("text"):
                 clear_requests.append(
@@ -841,9 +865,7 @@ def append_slides(
                 )
         has_media = bool(image_urls) or bool(youtube_ids)
         # Resize body text box for text-only submissions
-        resize_reqs = _body_resize_requests(
-            new_slide.get("pageElements", []), has_images=has_media
-        )
+        resize_reqs = _body_resize_requests(page_elements, has_images=has_media)
         all_clear_reqs = clear_requests + resize_reqs
         if all_clear_reqs:
             execute_with_retry(
@@ -853,30 +875,39 @@ def append_slides(
                 )
             )
 
-        # Set new text
+        # Insert new text directly into the identified shapes.
+        # We use insertText rather than replaceAllText because the
+        # duplicated slide contains real content (not {{AUTHOR}}/{{BODY}}
+        # placeholders) and the text was cleared above.
         author_text = f"Answer: {author}" if named else "Answer:"
-        text_requests = [
-            {
-                "replaceAllText": {
-                    "containsText": {"text": "{{AUTHOR}}"},
-                    "replaceText": author_text,
-                    "pageObjectIds": [new_slide_id],
+        text_requests = []
+        if author_obj_id:
+            text_requests.append(
+                {
+                    "insertText": {
+                        "objectId": author_obj_id,
+                        "text": author_text,
+                        "insertionIndex": 0,
+                    }
                 }
-            },
-            {
-                "replaceAllText": {
-                    "containsText": {"text": "{{BODY}}"},
-                    "replaceText": body_text,
-                    "pageObjectIds": [new_slide_id],
-                }
-            },
-        ]
-        execute_with_retry(
-            slides_svc.presentations().batchUpdate(
-                presentationId=pres_id,
-                body={"requests": text_requests},
             )
-        )
+        if body_obj_id:
+            text_requests.append(
+                {
+                    "insertText": {
+                        "objectId": body_obj_id,
+                        "text": body_text,
+                        "insertionIndex": 0,
+                    }
+                }
+            )
+        if text_requests:
+            execute_with_retry(
+                slides_svc.presentations().batchUpdate(
+                    presentationId=pres_id,
+                    body={"requests": text_requests},
+                )
+            )
 
         # Insert images
         if image_urls:

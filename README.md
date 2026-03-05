@@ -134,20 +134,23 @@ The following environment variables are set automatically by the workflow or hav
 
 ### Automatic (Scheduled)
 
-The workflow runs every **Friday at 11:30 AM UK time** (slides mode) and again at **6:00 PM UK time** (announce mode). Two cron expressions per mode handle the clocks-change:
+The workflow runs every **Friday at 11:30 AM UK time** (slides mode) and again at **6:00 PM UK time** (announce mode). A **Thursday 9:00 PM UK time** preview run sends results to the mod channel. Two cron expressions per mode handle the clocks-change:
 
 - `30 10 * * 5` — 10:30 UTC = 11:30 BST (slides, summer)
 - `30 11 * * 5` — 11:30 UTC = 11:30 GMT (slides, winter)
 - `0 17 * * 5` — 17:00 UTC = 18:00 BST (announce, summer)
 - `0 18 * * 5` — 18:00 UTC = 18:00 GMT (announce, winter)
+- `0 20 * * 4` — 20:00 UTC = 21:00 BST (preview, summer)
+- `0 21 * * 4` — 21:00 UTC = 21:00 GMT (preview, winter)
 
-At the start of each run the workflow reads the current UK hour and sets the appropriate mode (11 → slides, 18 → announce), skipping execution for any other hour to prevent double-runs during DST change weekends.
+At the start of each run the workflow reads the current UK hour and sets the appropriate mode (11 → slides, 18 → announce, 21 → preview), skipping execution for any other hour to prevent double-runs during DST change weekends.
 
 ### Manual Trigger
 
 1. Go to **Actions → Weekly Slides** in GitHub.
 2. Click **Run workflow**.
-3. Set `force_reset` to `true` to wipe saved state and create brand-new decks even if the marker hasn't changed.
+3. The default mode is **preview**, which sends results to the mod channel for testing.
+4. Set `force_reset` to `true` to wipe saved state and create brand-new decks even if the marker hasn't changed.
 
 ### Running Locally
 
@@ -227,8 +230,10 @@ The UK observes **BST (UTC+1)** from late March to late October and **GMT (UTC+0
 - **Slides — Winter**: `30 11 * * 5` fires at 11:30 UTC = 11:30 GMT.
 - **Announce — Summer**: `0 17 * * 5` fires at 17:00 UTC = 18:00 BST.
 - **Announce — Winter**: `0 18 * * 5` fires at 18:00 UTC = 18:00 GMT.
+- **Preview — Summer**: `0 20 * * 4` fires at 20:00 UTC = 21:00 BST.
+- **Preview — Winter**: `0 21 * * 4` fires at 21:00 UTC = 21:00 GMT.
 
-On clocks-change Fridays, both crons for the same mode fire. The DST guard at the start of the job reads `TZ='Europe/London' date +%H` and skips the run if the UK hour doesn't match 11 (slides) or 18 (announce).
+On clocks-change Fridays (or Thursdays for preview), both crons for the same mode fire. The DST guard at the start of the job reads `TZ='Europe/London' date +%H` and skips the run if the UK hour doesn't match 11 (slides), 18 (announce), or 21 (preview).
 
 ---
 

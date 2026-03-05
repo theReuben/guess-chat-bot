@@ -6,8 +6,8 @@ on:
     - cron: '30 11 * * 5'  # 11:30 UTC (= 11:30 GMT, winter)
     - cron: '0 17 * * 5'   # 17:00 UTC (= 18:00 BST, summer) – announce mode
     - cron: '0 18 * * 5'   # 18:00 UTC (= 18:00 GMT, winter) – announce mode
-    - cron: '0 19 * * 4'   # 19:00 UTC (= 20:00 BST, summer) – Thursday preview
-    - cron: '0 20 * * 4'   # 20:00 UTC (= 20:00 GMT, winter) – Thursday preview
+    - cron: '0 20 * * 4'   # 20:00 UTC (= 21:00 BST, summer) – Thursday preview
+    - cron: '0 21 * * 4'   # 21:00 UTC (= 21:00 GMT, winter) – Thursday preview
   workflow_dispatch:
     inputs:
       force_reset:
@@ -21,12 +21,12 @@ on:
       bot_mode:
         description: 'Bot operation mode'
         required: false
-        default: 'slides'
+        default: 'preview'
         type: choice
         options:
+          - 'preview'
           - 'slides'
           - 'announce'
-          - 'preview'
 
 concurrency:
   group: guess-chat
@@ -44,7 +44,7 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "Manual trigger — skipping DST time check."
             MODE="${{ github.event.inputs.bot_mode }}"
-            echo "BOT_MODE=${MODE:-slides}" >> "$GITHUB_ENV"
+            echo "BOT_MODE=${MODE:-preview}" >> "$GITHUB_ENV"
             exit 0
           fi
           UK_HOUR=$(TZ='Europe/London' date +%H)
@@ -53,7 +53,7 @@ jobs:
             echo "BOT_MODE=slides" >> "$GITHUB_ENV"
           elif [ "$UK_HOUR" = "18" ]; then
             echo "BOT_MODE=announce" >> "$GITHUB_ENV"
-          elif [ "$UK_HOUR" = "20" ]; then
+          elif [ "$UK_HOUR" = "21" ]; then
             echo "BOT_MODE=preview" >> "$GITHUB_ENV"
           else
             echo "Not a valid UK scheduled hour — skipping this run."

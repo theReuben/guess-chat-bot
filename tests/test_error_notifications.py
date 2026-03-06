@@ -13,7 +13,7 @@ os.environ.setdefault("DISCORD_CHANNEL_ID", "1")
 os.environ.setdefault("DISCORD_RESULTS_CHANNEL_ID", "2")
 os.environ.setdefault("TEMPLATE_DECK_ID", "tpl")
 
-from weekly_slides_bot import build_deck, append_slides, generate_slides, slide_url, discord_message_url, format_error_message, presentation_url, publish_presentation
+from weekly_slides_bot import build_deck, append_slides, generate_slides, slide_url, discord_message_url, format_error_message, presentation_url
 
 
 class _ClientHelper:
@@ -308,42 +308,15 @@ class TestURLHelpers:
         url = discord_message_url(111, 222, "333")
         assert url == "https://discord.com/channels/111/222/333"
 
-    def test_presentation_url_uses_pub_not_edit(self):
-        """presentation_url must use /pub (view-only) rather than /edit."""
+    def test_presentation_url_uses_view_not_edit(self):
+        """presentation_url must use /view (view-only) rather than /edit."""
         url = presentation_url("pres456")
-        assert "/pub" in url
+        assert "/view" in url
         assert "/edit" not in url
 
     def test_presentation_url_format(self):
         url = presentation_url("pres456")
-        assert url == "https://docs.google.com/presentation/d/pres456/pub?usp=sharing"
-
-
-class TestPublishPresentation:
-    """Unit tests for publish_presentation helper."""
-
-    def test_publishes_head_revision(self):
-        drive_svc = MagicMock()
-        drive_svc.revisions().list().execute.return_value = {
-            "revisions": [{"id": "1"}, {"id": "2"}]
-        }
-        publish_presentation(drive_svc, "file_abc")
-        drive_svc.revisions().update.assert_called_once_with(
-            fileId="file_abc",
-            revisionId="2",
-            body={"published": True, "publishAuto": True},
-            fields="published",
-        )
-        drive_svc.revisions().update().execute.assert_called_once()
-
-    def test_skips_when_no_revisions(self, capsys):
-        drive_svc = MagicMock()
-        drive_svc.revisions().list().execute.return_value = {"revisions": []}
-        # Should not raise and should warn
-        publish_presentation(drive_svc, "file_empty")
-        drive_svc.revisions().update.assert_not_called()
-        captured = capsys.readouterr()
-        assert "[warn]" in captured.out
+        assert url == "https://docs.google.com/presentation/d/pres456/view?usp=sharing"
 
 
 class TestFormatErrorMessage:

@@ -179,11 +179,11 @@ def copy_presentation(drive_svc, title: str) -> str:
 
 
 def share_presentation(drive_svc, file_id: str) -> None:
-    """Share presentation as anyone-with-link viewer."""
+    """Share presentation as anyone-with-link editor."""
     execute_with_retry(
         drive_svc.permissions().create(
             fileId=file_id,
-            body={"type": "anyone", "role": "reader"},
+            body={"type": "anyone", "role": "writer"},
             fields="id",
         )
     )

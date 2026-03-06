@@ -143,7 +143,10 @@ The workflow runs every **Friday at 11:30 AM UK time** (slides mode) and again a
 - `0 20 * * 4` — 20:00 UTC = 21:00 BST (preview, summer)
 - `0 21 * * 4` — 21:00 UTC = 21:00 GMT (preview, winter)
 
-At the start of each run the workflow reads the current UK hour and sets the appropriate mode (11 → slides, 18 → announce, 21 → preview), skipping execution for any other hour to prevent double-runs during DST change weekends.
+At the start of each run the workflow reads the current UK time and sets the appropriate mode, skipping the run for any other time to prevent double-runs during DST change weekends.
+
+> **Why doesn't the bot run exactly at the given times?**
+> GitHub Actions scheduled workflows are not guaranteed to start at the exact cron time — jobs can be delayed by minutes to (rarely) tens of minutes during periods of high runner demand. The slides cron fires at `:30` past the hour, so even a modest delay can push the clock past the hour boundary (e.g., 11:30 BST → 12:05 BST). To keep the bot running despite such delays the DST guard accepts **UK hour 11 or UK hour 12 with minute < 30** for slides mode. This 30-minute grace window still correctly rejects the "wrong" DST-transition cron, which always fires at `:30` past the *next* hour (12:30 BST/GMT). The announce and preview crons fire at `:00`, so any delay up to 59 minutes stays within the expected UK hour and no extra tolerance is needed.
 
 ### Manual Trigger
 
@@ -233,7 +236,16 @@ The UK observes **BST (UTC+1)** from late March to late October and **GMT (UTC+0
 - **Preview — Summer**: `0 20 * * 4` fires at 20:00 UTC = 21:00 BST.
 - **Preview — Winter**: `0 21 * * 4` fires at 21:00 UTC = 21:00 GMT.
 
-On clocks-change Fridays (or Thursdays for preview), both crons for the same mode fire. The DST guard at the start of the job reads `TZ='Europe/London' date +%H` and skips the run if the UK hour doesn't match 11 (slides), 18 (announce), or 21 (preview).
+On clocks-change Fridays (or Thursdays for preview), both crons for the same mode fire. The DST guard at the start of the job reads `TZ='Europe/London' date +%H` and `+%M` and applies the following logic:
+
+| Condition | Action |
+|---|---|
+| UK hour = 11, **or** UK hour = 12 and minute < 30 | Run in **slides** mode |
+| UK hour = 18 | Run in **announce** mode |
+| UK hour = 21 | Run in **preview** mode |
+| Anything else | Skip (log "skipping this scheduled run") |
+
+The slides guard uses a 30-minute grace window (12:00–12:29 UK) to survive GitHub Actions scheduling delays. The "wrong" DST-transition cron for slides always lands at exactly `:30` past the next hour, so it is still rejected (12:30 BST or 12:30 GMT fails `minute < 30`). Announce and preview crons fire at `:00`, so any delay under 60 minutes stays within the expected hour without needing an extra buffer.
 
 ---
 
@@ -266,6 +278,7 @@ Tests use `unittest.mock` (`MagicMock`, `AsyncMock`, `patch`) to mock all Discor
 | Template slide not found | Ensure Slide 2 of the template contains the text `{{AUTHOR}}` in a text box |
 | Images not appearing | Discord CDN links expire; the bot re-uploads images to Drive — check the OAuth token has Drive write access |
 | Double-run on DST change | The DST guard handles this; check the workflow logs for "skipping this scheduled run" |
+| Bot skipped due to runner delay | The slides guard tolerates up to 30 min of GitHub Actions delay (accepts UK 12:00–12:29); if a run was still skipped, trigger it manually via **Actions → Run workflow** |
 | State branch missing | It is created automatically on the first successful run |
 
 ---

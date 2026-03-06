@@ -199,7 +199,7 @@ def delete_drive_file(drive_svc, file_id: str) -> None:
 
 
 def presentation_url(pres_id: str) -> str:
-    return f"https://docs.google.com/presentation/d/{pres_id}/view?usp=sharing"
+    return f"https://docs.google.com/presentation/d/{pres_id}/edit?usp=sharing"
 
 
 def slide_url(pres_id: str, slide_id: str) -> str:

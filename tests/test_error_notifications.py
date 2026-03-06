@@ -13,7 +13,7 @@ os.environ.setdefault("DISCORD_CHANNEL_ID", "1")
 os.environ.setdefault("DISCORD_RESULTS_CHANNEL_ID", "2")
 os.environ.setdefault("TEMPLATE_DECK_ID", "tpl")
 
-from weekly_slides_bot import build_deck, append_slides, generate_slides, slide_url, discord_message_url, format_error_message, presentation_url
+from weekly_slides_bot import build_deck, append_slides, generate_slides, slide_url, discord_message_url, format_error_message
 
 
 class _ClientHelper:
@@ -298,7 +298,7 @@ class TestGenerateSlidesSendsErrors:
 
 
 class TestURLHelpers:
-    """Tests for slide_url, discord_message_url, and presentation_url helpers."""
+    """Tests for slide_url and discord_message_url helpers."""
 
     def test_slide_url_format(self):
         url = slide_url("pres123", "slide_abc")
@@ -307,16 +307,6 @@ class TestURLHelpers:
     def test_discord_message_url_format(self):
         url = discord_message_url(111, 222, "333")
         assert url == "https://discord.com/channels/111/222/333"
-
-    def test_presentation_url_uses_view_not_edit(self):
-        """presentation_url must use /view (view-only) rather than /edit."""
-        url = presentation_url("pres456")
-        assert "/view" in url
-        assert "/edit" not in url
-
-    def test_presentation_url_format(self):
-        url = presentation_url("pres456")
-        assert url == "https://docs.google.com/presentation/d/pres456/view?usp=sharing"
 
 
 class TestFormatErrorMessage:

@@ -381,10 +381,10 @@ def _insert_images(
 
 def _get_shape_text(elem: dict) -> str:
     """Extract the concatenated text content from a shape element."""
-    text = ""
+    parts: list[str] = []
     for te in elem.get("shape", {}).get("text", {}).get("textElements", []):
-        text += te.get("textRun", {}).get("content", "")
-    return text
+        parts.append(te.get("textRun", {}).get("content", ""))
+    return "".join(parts)
 
 
 def _find_body_element(page_elements: list[dict]) -> dict | None:

@@ -379,40 +379,85 @@ def _insert_images(
     return error_details
 
 
+def _get_shape_text(elem: dict) -> str:
+    """Extract the concatenated text content from a shape element."""
+    parts: list[str] = []
+    for te in elem.get("shape", {}).get("text", {}).get("textElements", []):
+        parts.append(te.get("textRun", {}).get("content", ""))
+    return "".join(parts)
+
+
 def _find_body_element(page_elements: list[dict]) -> dict | None:
-    """Return the body text box element (largest shape below the author bar)."""
-    candidates = [
-        elem for elem in page_elements
-        if elem.get("shape")
-        and elem.get("transform", {}).get("translateY", 0) / _PT >= _AUTHOR_BAR_PT - _BODY_Y_TOLERANCE_PT
-    ]
-    if not candidates:
-        return None
-    return max(
-        candidates,
-        key=lambda e: (
+    """Return the body text box element (largest shape below the author bar).
+
+    Falls back to text-content identification when no shapes are found at
+    the expected vertical position.
+    """
+    shapes = [elem for elem in page_elements if elem.get("shape")]
+
+    def _by_area(e: dict) -> float:
+        return (
             e.get("size", {}).get("width", {}).get("magnitude", 0)
             * e.get("size", {}).get("height", {}).get("magnitude", 0)
-        ),
-    )
+        )
+
+    # Primary: shapes below the author bar threshold
+    candidates = [
+        elem for elem in shapes
+        if elem.get("transform", {}).get("translateY", 0) / _PT >= _AUTHOR_BAR_PT - _BODY_Y_TOLERANCE_PT
+    ]
+    if candidates:
+        return max(candidates, key=_by_area)
+
+    # Fallback: largest non-author shape whose text does not start with "Answer:"
+    candidates = []
+    author_elem = _find_author_element(page_elements)
+    author_id = author_elem.get("objectId") if author_elem else None
+    for elem in shapes:
+        # Skip the author box if we were able to identify it
+        if author_id is not None and elem.get("objectId") == author_id:
+            continue
+        txt = _get_shape_text(elem).strip()
+        # Allow empty body placeholders, but avoid the "Answer:" box
+        if not txt.startswith("Answer:"):
+            candidates.append(elem)
+    if candidates:
+        return max(candidates, key=_by_area)
+
+    return None
 
 
 def _find_author_element(page_elements: list[dict]) -> dict | None:
-    """Return the author text box element (shape in the author bar area)."""
-    candidates = [
-        elem for elem in page_elements
-        if elem.get("shape")
-        and elem.get("transform", {}).get("translateY", 0) / _PT < _AUTHOR_BAR_PT - _BODY_Y_TOLERANCE_PT
-    ]
-    if not candidates:
-        return None
-    return max(
-        candidates,
-        key=lambda e: (
+    """Return the author text box element (shape in the author bar area).
+
+    Falls back to text-content identification when no shapes are found at
+    the expected vertical position.
+    """
+    shapes = [elem for elem in page_elements if elem.get("shape")]
+
+    def _by_area(e: dict) -> float:
+        return (
             e.get("size", {}).get("width", {}).get("magnitude", 0)
             * e.get("size", {}).get("height", {}).get("magnitude", 0)
-        ),
-    )
+        )
+
+    # Primary: shapes above the author bar threshold
+    candidates = [
+        elem for elem in shapes
+        if elem.get("transform", {}).get("translateY", 0) / _PT < _AUTHOR_BAR_PT - _BODY_Y_TOLERANCE_PT
+    ]
+    if candidates:
+        return max(candidates, key=_by_area)
+
+    # Fallback: shape whose text starts with "Answer:"
+    candidates = [
+        elem for elem in shapes
+        if _get_shape_text(elem).strip().startswith("Answer:")
+    ]
+    if candidates:
+        return max(candidates, key=_by_area)
+
+    return None
 
 
 def _body_resize_requests(page_elements: list[dict], has_images: bool) -> list[dict]:

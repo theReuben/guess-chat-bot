@@ -59,6 +59,8 @@ class TestBlockingCallsOffloaded:
             "anon_id",    # copy_presentation (anon)
             None,         # share_presentation (named)
             None,         # share_presentation (anon)
+            None,         # publish_presentation (named)
+            None,         # publish_presentation (anon)
             [],           # build_deck (named)
             [],           # build_deck (anon)
             None,         # save_state
@@ -82,7 +84,7 @@ class TestBlockingCallsOffloaded:
         await generate_slides(mock_client)
 
         # Verify to_thread was called for each blocking operation
-        assert mock_to_thread.await_count == 8
+        assert mock_to_thread.await_count == 10
         called_funcs = [c.args[0].__name__ for c in mock_to_thread.call_args_list]
         assert called_funcs == [
             "get_google_services",
@@ -90,6 +92,8 @@ class TestBlockingCallsOffloaded:
             "copy_presentation",
             "share_presentation",
             "share_presentation",
+            "publish_presentation",
+            "publish_presentation",
             "build_deck",
             "build_deck",
             "save_state",

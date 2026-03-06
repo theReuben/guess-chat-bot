@@ -189,6 +189,26 @@ def share_presentation(drive_svc, file_id: str) -> None:
     )
 
 
+def publish_presentation(drive_svc, file_id: str) -> None:
+    """Publish presentation to the web so the /pub URL is accessible as view-only."""
+    result = execute_with_retry(
+        drive_svc.revisions().list(fileId=file_id, fields="revisions(id)")
+    )
+    revisions = result.get("revisions", [])
+    if not revisions:
+        print(f"[warn] No revisions found for {file_id}; skipping publish.")
+        return
+    head_revision_id = revisions[-1]["id"]
+    execute_with_retry(
+        drive_svc.revisions().update(
+            fileId=file_id,
+            revisionId=head_revision_id,
+            body={"published": True, "publishAuto": True},
+            fields="published",
+        )
+    )
+
+
 def delete_drive_file(drive_svc, file_id: str) -> None:
     """Delete a file from Google Drive. Silently ignores missing files."""
     try:
@@ -199,7 +219,7 @@ def delete_drive_file(drive_svc, file_id: str) -> None:
 
 
 def presentation_url(pres_id: str) -> str:
-    return f"https://docs.google.com/presentation/d/{pres_id}/edit?usp=sharing"
+    return f"https://docs.google.com/presentation/d/{pres_id}/pub?usp=sharing"
 
 
 def slide_url(pres_id: str, slide_id: str) -> str:
@@ -1170,6 +1190,8 @@ async def generate_slides(client: discord.Client) -> None:
         anon_pres_id = await asyncio.to_thread(copy_presentation, drive_svc, f"Guess Chat — {topic} (Anonymous)")
         await asyncio.to_thread(share_presentation, drive_svc, named_pres_id)
         await asyncio.to_thread(share_presentation, drive_svc, anon_pres_id)
+        await asyncio.to_thread(publish_presentation, drive_svc, named_pres_id)
+        await asyncio.to_thread(publish_presentation, drive_svc, anon_pres_id)
         processed_ids = set()
 
     new_submissions = [s for s in all_submissions if s["id"] not in processed_ids]

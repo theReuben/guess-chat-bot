@@ -339,3 +339,133 @@ class TestFallbackAppendSlides:
         inserted_texts = {r["insertText"]["text"] for r in insert_text_reqs}
         assert "Answer: NewUser" in inserted_texts
         assert "New body text" in inserted_texts
+
+        # Ensure the author text is written into the author textbox on the new slide
+        author_req = next(
+            r for r in insert_text_reqs if r["insertText"]["text"] == "Answer: NewUser"
+        )
+        assert author_req["insertText"]["objectId"] == f"{new_slide_id}_author"
+
+        # Ensure the body text is written into the body textbox on the new slide
+        body_req = next(
+            r for r in insert_text_reqs if r["insertText"]["text"] == "New body text"
+        )
+        assert body_req["insertText"]["objectId"] == f"{new_slide_id}_body"
+
+    def test_text_inserted_when_author_below_threshold_and_body_above(self):
+        """Fallback still inserts text correctly when author is below and body is above the author bar threshold."""
+        title_slide = {"objectId": "title", "pageElements": []}
+        # Existing slide with author below the threshold and body above it (swapped layout).
+        author_elem = _make_shape_element(
+            "exist_author",
+            24,
+            _AUTHOR_BAR_PT + 10,
+            300,
+            40,
+            text="Answer: OldUser",
+        )
+        body_elem = _make_shape_element(
+            "exist_body",
+            24,
+            _AUTHOR_BAR_PT - 20,
+            500,
+            300,
+            text="Old body text",
+        )
+        existing_slide = {
+            "objectId": "existing",
+            "pageElements": [author_elem, body_elem],
+        }
+        end_slide = {"objectId": "end", "pageElements": []}
+        initial_slides = [title_slide, existing_slide, end_slide]
+
+        new_slide_id = "new_slide_2"
+        new_author = _make_shape_element(
+            f"{new_slide_id}_author",
+            24,
+            _AUTHOR_BAR_PT + 10,
+            300,
+            40,
+            text="Answer: OldUser",
+        )
+        new_body = _make_shape_element(
+            f"{new_slide_id}_body",
+            24,
+            _AUTHOR_BAR_PT - 20,
+            500,
+            300,
+            text="Old body text",
+        )
+        new_slide = {
+            "objectId": new_slide_id,
+            "pageElements": [new_author, new_body],
+        }
+
+        batch_calls = []
+
+        def mock_batch_update(**kwargs):
+            batch_calls.append(kwargs["body"]["requests"])
+            mock_resp = MagicMock()
+            if any("duplicateObject" in r for r in kwargs["body"]["requests"]):
+                mock_resp.return_value = {
+                    "replies": [{"duplicateObject": {"objectId": new_slide_id}}]
+                }
+            else:
+                mock_resp.return_value = {}
+            return mock_resp
+
+        get_call_count = [0]
+
+        def mock_get(**kwargs):
+            get_call_count[0] += 1
+            mock_resp = MagicMock()
+            if get_call_count[0] == 1:
+                mock_resp.return_value = {"slides": initial_slides}
+            else:
+                mock_resp.return_value = {
+                    "slides": [title_slide, existing_slide, new_slide, end_slide]
+                }
+            return mock_resp
+
+        mock_slides_svc = MagicMock()
+        mock_slides_svc.presentations.return_value.batchUpdate.side_effect = mock_batch_update
+        mock_slides_svc.presentations.return_value.get.side_effect = mock_get
+
+        submissions = [
+            {
+                "id": "2",
+                "author": "NewUser",
+                "body": "New body text",
+                "images": [],
+                "youtube_ids": [],
+            }
+        ]
+
+        with patch("weekly_slides_bot.execute_with_retry", side_effect=lambda req: req()):
+            errors = append_slides(
+                mock_slides_svc,
+                MagicMock(),
+                "pres_456",
+                submissions,
+                named=True,
+                image_cache={},
+            )
+
+        assert errors == []
+
+        all_requests = [req for batch in batch_calls for req in batch]
+        insert_text_reqs = [r for r in all_requests if "insertText" in r]
+        assert len(insert_text_reqs) == 2, f"Expected 2 insertText requests, got {len(insert_text_reqs)}"
+        inserted_texts = {r["insertText"]["text"] for r in insert_text_reqs}
+        assert "Answer: NewUser" in inserted_texts
+        assert "New body text" in inserted_texts
+
+        author_req = next(
+            r for r in insert_text_reqs if r["insertText"]["text"] == "Answer: NewUser"
+        )
+        assert author_req["insertText"]["objectId"] == f"{new_slide_id}_author"
+
+        body_req = next(
+            r for r in insert_text_reqs if r["insertText"]["text"] == "New body text"
+        )
+        assert body_req["insertText"]["objectId"] == f"{new_slide_id}_body"

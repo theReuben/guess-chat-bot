@@ -48,8 +48,12 @@ jobs:
             exit 0
           fi
           UK_HOUR=$(TZ='Europe/London' date +%H)
-          echo "Current UK hour: $UK_HOUR"
-          if [ "$UK_HOUR" = "11" ]; then
+          UK_MIN=$(TZ='Europe/London' date +%M)
+          echo "Current UK time: $UK_HOUR:$UK_MIN"
+          # Slides cron fires at :30 — allow up to 30 min late (12:00–12:29 UK) to
+          # guard against GitHub Actions scheduling delays, while still rejecting the
+          # "wrong" DST-transition cron that always lands at :30 past the next hour.
+          if [ "$UK_HOUR" = "11" ] || { [ "$UK_HOUR" = "12" ] && [ "$UK_MIN" -lt 30 ]; }; then
             echo "BOT_MODE=slides" >> "$GITHUB_ENV"
           elif [ "$UK_HOUR" = "18" ]; then
             echo "BOT_MODE=announce" >> "$GITHUB_ENV"

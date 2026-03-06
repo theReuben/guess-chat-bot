@@ -409,11 +409,17 @@ def _find_body_element(page_elements: list[dict]) -> dict | None:
     if candidates:
         return max(candidates, key=_by_area)
 
-    # Fallback: largest shape with text that does not start with "Answer:"
+    # Fallback: largest non-author shape whose text does not start with "Answer:"
     candidates = []
+    author_elem = _find_author_element(page_elements)
+    author_id = author_elem.get("objectId") if author_elem else None
     for elem in shapes:
+        # Skip the author box if we were able to identify it
+        if author_id is not None and elem.get("objectId") == author_id:
+            continue
         txt = _get_shape_text(elem).strip()
-        if txt and not txt.startswith("Answer:"):
+        # Allow empty body placeholders, but avoid the "Answer:" box
+        if not txt.startswith("Answer:"):
             candidates.append(elem)
     if candidates:
         return max(candidates, key=_by_area)

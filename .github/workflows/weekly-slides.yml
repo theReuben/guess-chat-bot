@@ -27,6 +27,8 @@ on:
           - 'preview'
           - 'slides'
           - 'announce'
+          - 'test_slides'
+          - 'test_announce'
 
 concurrency:
   group: guess-chat
@@ -106,6 +108,7 @@ jobs:
           DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
           DISCORD_RESULTS_CHANNEL_ID: ${{ secrets.DISCORD_RESULTS_CHANNEL_ID }}
           DISCORD_MOD_CHANNEL_ID: ${{ secrets.DISCORD_MOD_CHANNEL_ID }}
+          DISCORD_TEST_CHANNEL_ID: ${{ secrets.DISCORD_TEST_CHANNEL_ID }}
           BOT_MODE: ${{ env.BOT_MODE }}
           DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
           TEMPLATE_DECK_ID: ${{ secrets.TEMPLATE_DECK_ID }}

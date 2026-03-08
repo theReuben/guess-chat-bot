@@ -37,6 +37,7 @@ DISCORD_CHANNEL_ID = int(os.environ["DISCORD_CHANNEL_ID"])
 DISCORD_RESULTS_CHANNEL_ID = int(os.environ["DISCORD_RESULTS_CHANNEL_ID"])
 _MOD_CHANNEL_RAW = os.environ.get("DISCORD_MOD_CHANNEL_ID")
 DISCORD_MOD_CHANNEL_ID: int | None = int(_MOD_CHANNEL_RAW) if _MOD_CHANNEL_RAW else None
+MOD_ROLE_NAME = os.environ.get("MOD_ROLE_NAME", "Mod")
 BOT_MODE = os.environ.get("BOT_MODE", "slides")
 GOOGLE_CREDS_FILE = os.environ.get("GOOGLE_CREDS_FILE", "service_account.json")
 DRIVE_FOLDER_ID = os.environ.get("DRIVE_FOLDER_ID")
@@ -210,6 +211,20 @@ def slide_url(pres_id: str, slide_id: str) -> str:
 def discord_message_url(guild_id: int, channel_id: int, message_id: str) -> str:
     """Return a direct URL to a Discord message."""
     return f"https://discord.com/channels/{guild_id}/{channel_id}/{message_id}"
+
+
+def _resolve_mod_mention(guild: discord.Guild | None) -> str:
+    """Return a proper Discord role mention for MOD_ROLE_NAME.
+
+    Looks up the role by name in *guild* and returns ``<@&ROLE_ID>``.
+    Falls back to ``@{MOD_ROLE_NAME}`` (plain text) if the guild is None or
+    the role cannot be found.
+    """
+    if guild is not None:
+        role = discord.utils.get(guild.roles, name=MOD_ROLE_NAME)
+        if role is not None:
+            return role.mention
+    return f"@{MOD_ROLE_NAME}"
 
 
 # ---------------------------------------------------------------------------
@@ -1295,8 +1310,10 @@ async def check_mod_and_announce(client: discord.Client) -> None:
         if DISCORD_MOD_CHANNEL_ID is not None:
             mod_channel = client.get_channel(DISCORD_MOD_CHANNEL_ID)
             if mod_channel is not None:
+                guild = getattr(submissions_channel, "guild", None)
+                mod_mention = _resolve_mod_mention(guild)
                 await mod_channel.send(
-                    "@Mods we haven't announced a new guess chat yet, is there a new one this week?"
+                    f"{mod_mention} we haven't announced a new guess chat yet, is there a new one this week?"
                 )
                 print("[info] Sent reminder to mod channel about missing new topic.")
             else:
@@ -1312,17 +1329,18 @@ async def check_mod_and_announce(client: discord.Client) -> None:
         mod_channel = client.get_channel(DISCORD_MOD_CHANNEL_ID)
         if mod_channel is not None:
             guild = getattr(submissions_channel, "guild", None)
+            mod_mention = _resolve_mod_mention(guild)
             guild_id = guild.id if guild is not None else None
             if guild_id is not None:
                 msg_url = discord_message_url(guild_id, DISCORD_CHANNEL_ID, str(posted_msg.id))
                 await mod_channel.send(
-                    f"@Mods New Guess Chat theme: **{topic}**\n"
+                    f"{mod_mention} New Guess Chat theme: **{topic}**\n"
                     f"Are there any extras we should add?\n"
                     f"{msg_url}"
                 )
             else:
                 await mod_channel.send(
-                    f"@Mods New Guess Chat theme: **{topic}**\n"
+                    f"{mod_mention} New Guess Chat theme: **{topic}**\n"
                     f"Are there any extras we should add?"
                 )
             print("[info] Sent confirmation to mod channel.")

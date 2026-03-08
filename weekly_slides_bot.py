@@ -268,6 +268,7 @@ def _self_assign_issue(api_url: str, headers: dict[str, str], issue_number: int)
             return
         login = user_resp.json().get("login")
         if not login:
+            print("[warn] GitHub user response missing login; skipping self-assign.")
             return
         assign_resp = requests.post(
             f"{api_url}/issues/{issue_number}/assignees",

@@ -247,10 +247,40 @@ def create_github_issue(exc: BaseException) -> None:
         if issue_resp.ok:
             issue_number = issue_resp.json().get("number")
             print(f"[info] Created GitHub issue #{issue_number}")
+            _self_assign_issue(api_url, headers, issue_number)
         else:
             print(f"[error] Failed to create GitHub issue: {issue_resp.status_code} {issue_resp.text}")
     except Exception as api_exc:  # noqa: BLE001
         print(f"[error] Could not create GitHub issue: {api_exc}")
+
+
+def _self_assign_issue(api_url: str, headers: dict[str, str], issue_number: int) -> None:
+    """Try to assign the authenticated GitHub user to the given issue.
+
+    Looks up the current user via ``GET /user`` and then adds them as an
+    assignee.  Failures are logged but never raised — assignment is
+    best-effort.
+    """
+    try:
+        user_resp = requests.get("https://api.github.com/user", headers=headers, timeout=15)
+        if not user_resp.ok:
+            print(f"[warn] Could not look up GitHub user for self-assign: {user_resp.status_code}")
+            return
+        login = user_resp.json().get("login")
+        if not login:
+            return
+        assign_resp = requests.post(
+            f"{api_url}/issues/{issue_number}/assignees",
+            headers=headers,
+            json={"assignees": [login]},
+            timeout=15,
+        )
+        if assign_resp.ok:
+            print(f"[info] Assigned {login} to issue #{issue_number}")
+        else:
+            print(f"[warn] Could not assign issue #{issue_number}: {assign_resp.status_code}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[warn] Self-assign failed for issue #{issue_number}: {exc}")
 
 
 # ---------------------------------------------------------------------------

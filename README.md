@@ -35,6 +35,7 @@ When a mod updates the submissions channel description to `Current Guess Chat: <
 - **Scheduled runs** — GitHub Actions triggers every Friday at 11:30 AM UK time (handles BST/GMT automatically).
 - **Manual trigger** — run from the GitHub Actions UI with an optional `force_reset` to start a fresh round.
 - **Fun facts generation** *(optional)* — uses Google Gemini to generate 3–5 fun bullet points about submission commonalities, outliers, and patterns. Inserted into the `{{FUNFACTS}}` placeholder on the title slide. Enabled by setting the `GEMINI_API_KEY` environment variable; disabled (placeholder cleared) when the key is absent.
+- **Automatic GitHub issue creation** *(optional)* — when an unhandled exception occurs during a bot run, a GitHub issue is automatically created with the traceback, bot mode, and timestamp. Duplicate issues are detected and skipped. Enabled by setting `GITHUB_TOKEN` and `GITHUB_REPOSITORY` environment variables (both are automatically available in GitHub Actions).
 
 ---
 
@@ -141,6 +142,8 @@ The following environment variables are set automatically by the workflow or hav
 |---|---|---|
 | `BOT_MODE` | `slides` | `slides` to generate decks, `announce` to post the GUESS CHAT marker and mod confirmation |
 | `MOD_ROLE_NAME` | `Mod` | Discord role name used to identify moderators |
+| `GITHUB_TOKEN` | *(set by Actions)* | GitHub token — enables automatic issue creation on unhandled errors |
+| `GITHUB_REPOSITORY` | *(set by Actions)* | Repository in `owner/repo` format — used with `GITHUB_TOKEN` for issue creation |
 
 ---
 
@@ -294,6 +297,7 @@ Tests use `unittest.mock` (`MagicMock`, `AsyncMock`, `patch`) to mock all Discor
 | Double-run on DST change | The DST guard handles this; check the workflow logs for "skipping this scheduled run" |
 | Bot skipped due to runner delay | The slides guard tolerates up to 30 min of GitHub Actions delay (accepts UK 12:00–12:29); if a run was still skipped, trigger it manually via **Actions → Run workflow** |
 | State branch missing | It is created automatically on the first successful run |
+| `RefreshError: Token has been expired or revoked` | Your Google OAuth token needs refreshing — re-run the OAuth consent flow and update the `GOOGLE_OAUTH_TOKEN` secret. When `GITHUB_TOKEN` and `GITHUB_REPOSITORY` are set, the bot automatically creates a GitHub issue for this error |
 
 ---
 

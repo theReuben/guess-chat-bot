@@ -39,6 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      issues: write
 
     steps:
       - name: Check UK time (DST guard) and set bot mode
@@ -114,6 +115,8 @@ jobs:
           TEMPLATE_DECK_ID: ${{ secrets.TEMPLATE_DECK_ID }}
           GOOGLE_CREDS_FILE: service_account.json
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: python weekly_slides_bot.py
 
       - name: Save state to state branch

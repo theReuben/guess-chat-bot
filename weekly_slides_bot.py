@@ -19,6 +19,7 @@ import os
 import random
 import re
 import time
+import traceback
 import zoneinfo
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,8 @@ DRIVE_FOLDER_ID = os.environ.get("DRIVE_FOLDER_ID")
 STATE_FILE = os.environ.get("STATE_FILE", "state.json")
 TEMPLATE_DECK_ID = os.environ["TEMPLATE_DECK_ID"]
 GEMINI_API_KEY: str | None = os.environ.get("GEMINI_API_KEY")
+GITHUB_TOKEN: str | None = os.environ.get("GITHUB_TOKEN")
+GITHUB_REPOSITORY: str | None = os.environ.get("GITHUB_REPOSITORY")
 
 MARKER_PREFIX = "GUESS CHAT"
 SUBMISSION_PREFIX = "SUBMISSION"
@@ -172,6 +175,82 @@ def load_state() -> dict:
 
 def save_state(state: dict) -> None:
     Path(STATE_FILE).write_text(json.dumps(state, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# GitHub issue creation on error
+# ---------------------------------------------------------------------------
+
+_ISSUE_LABEL = "bot-error"
+
+
+def create_github_issue(exc: BaseException) -> None:
+    """Create a GitHub issue for an unhandled bot exception.
+
+    Requires ``GITHUB_TOKEN`` and ``GITHUB_REPOSITORY`` environment variables.
+    If either is missing the function silently returns.  Duplicate open issues
+    with the same title are avoided by searching before creating.
+    """
+    if not GITHUB_TOKEN or not GITHUB_REPOSITORY:
+        print("[warn] GITHUB_TOKEN or GITHUB_REPOSITORY not set; skipping issue creation.")
+        return
+
+    exc_type = type(exc).__qualname__
+    title = f"Bot error: {exc_type}: {exc}"
+    # Truncate title to fit GitHub's limit
+    if len(title) > 256:
+        title = title[:253] + "..."
+
+    tb = traceback.format_exception(type(exc), exc, exc.__traceback__)
+    body_lines = [
+        f"**Bot mode:** `{BOT_MODE}`",
+        f"**Time (UTC):** {datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}",
+        "",
+        "### Traceback",
+        "```",
+        "".join(tb).rstrip(),
+        "```",
+    ]
+    body = "\n".join(body_lines)
+
+    api_url = f"https://api.github.com/repos/{GITHUB_REPOSITORY}"
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json",
+    }
+
+    try:
+        # Check for an existing open issue with the same title
+        search_url = "https://api.github.com/search/issues"
+        query = f"repo:{GITHUB_REPOSITORY} is:issue is:open in:title {exc_type}"
+        resp = requests.get(search_url, headers=headers, params={"q": query}, timeout=15)
+        if resp.ok:
+            for item in resp.json().get("items", []):
+                if item.get("title") == title:
+                    print(f"[info] Duplicate issue already open: #{item['number']}")
+                    return
+
+        # Ensure the label exists (ignore errors if it already does)
+        requests.post(
+            f"{api_url}/labels",
+            headers=headers,
+            json={"name": _ISSUE_LABEL, "color": "d73a4a", "description": "Automated error report from bot run"},
+            timeout=15,
+        )
+
+        issue_resp = requests.post(
+            f"{api_url}/issues",
+            headers=headers,
+            json={"title": title, "body": body, "labels": [_ISSUE_LABEL]},
+            timeout=15,
+        )
+        if issue_resp.ok:
+            issue_number = issue_resp.json().get("number")
+            print(f"[info] Created GitHub issue #{issue_number}")
+        else:
+            print(f"[error] Failed to create GitHub issue: {issue_resp.status_code} {issue_resp.text}")
+    except Exception as api_exc:  # noqa: BLE001
+        print(f"[error] Could not create GitHub issue: {api_exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -1565,6 +1644,10 @@ class OneShotClient(discord.Client):
             else:
                 print(f"[warn] Unknown BOT_MODE '{BOT_MODE}'; proceeding with generate_slides.")
                 await generate_slides(self)
+        except Exception as exc:
+            print(f"[error] Unhandled exception in on_ready: {exc}")
+            await asyncio.to_thread(create_github_issue, exc)
+            raise
         finally:
             await self.close()
 

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import datetime
 import os
+import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,9 +17,11 @@ os.environ.setdefault("TEMPLATE_DECK_ID", "tpl")
 
 import discord
 from weekly_slides_bot import (
+    build_announcement_message,
     _resolve_mod_mention,
     check_mod_and_announce,
     extract_topic,
+    next_friday_deadline_unix,
     parse_channel_topic,
 )
 
@@ -63,6 +67,75 @@ class TestParseChannelTopic:
         assert parse_channel_topic(None) is None
 
 
+class TestBuildAnnouncementMessage:
+    """Tests for the build_announcement_message helper."""
+
+    def test_contains_guess_chat_heading(self):
+        msg = build_announcement_message("Favourite Food")
+        assert "# GUESS CHAT" in msg
+
+    def test_topic_uppercased_as_heading(self):
+        msg = build_announcement_message("Favourite Food")
+        assert "# FAVOURITE FOOD" in msg
+
+    def test_contains_everyone_ping(self):
+        msg = build_announcement_message("Favourite Food")
+        assert "@everyone" in msg
+
+    def test_contains_submission_tag(self):
+        msg = build_announcement_message("Favourite Food")
+        assert "**SUBMISSION**" in msg
+
+    def test_contains_deadline_timestamp(self):
+        msg = build_announcement_message("Favourite Food")
+        assert "deadline: <t:" in msg
+        assert ":F>" in msg
+
+    def test_deadline_is_integer_timestamp(self):
+        msg = build_announcement_message("Favourite Food")
+        match = re.search(r"<t:(\d+):F>", msg)
+        assert match is not None, "Discord timestamp not found in message"
+        assert int(match.group(1)) > 0
+
+
+class TestNextFridayDeadlineUnix:
+    """Tests for the next_friday_deadline_unix helper."""
+
+    def test_returns_integer(self):
+        ts = next_friday_deadline_unix()
+        assert isinstance(ts, int)
+
+    def test_returns_a_friday(self):
+        ts = next_friday_deadline_unix()
+        dt = datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
+        assert dt.weekday() == 4  # 4 == Friday
+
+    def test_next_friday_from_non_friday(self):
+        # Monday 2026-03-09 12:00 UTC
+        ref = datetime.datetime(2026, 3, 9, 12, 0, tzinfo=datetime.timezone.utc)
+        ts = next_friday_deadline_unix(ref)
+        dt = datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
+        assert dt.weekday() == 4
+
+    def test_friday_before_deadline_returns_same_friday(self):
+        """If it's Friday before 11:30 UK, the deadline is the same Friday."""
+        # Friday 2026-03-13 09:00 UTC (10:00 UK / BST doesn't start until late March)
+        ref = datetime.datetime(2026, 3, 13, 9, 0, tzinfo=datetime.timezone.utc)
+        ts = next_friday_deadline_unix(ref)
+        dt = datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
+        assert dt.weekday() == 4
+        assert dt.date() == datetime.date(2026, 3, 13)
+
+    def test_friday_after_deadline_returns_next_friday(self):
+        """If it's Friday at or after 11:30 UK, the deadline is the following Friday."""
+        # Friday 2026-03-13 12:00 UTC (12:00 UK in winter = after 11:30)
+        ref = datetime.datetime(2026, 3, 13, 12, 0, tzinfo=datetime.timezone.utc)
+        ts = next_friday_deadline_unix(ref)
+        dt = datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
+        assert dt.weekday() == 4
+        assert dt.date() == datetime.date(2026, 3, 20)
+
+
 class TestCheckModAndAnnounce:
     """Tests for the channel-description based check_mod_and_announce function."""
 
@@ -102,7 +175,13 @@ class TestCheckModAndAnnounce:
 
         await check_mod_and_announce(mock_client)
 
-        mock_channel.send.assert_called_once_with("GUESS CHAT Favourite Food")
+        mock_channel.send.assert_called_once()
+        sent_text = mock_channel.send.call_args.args[0]
+        assert "# GUESS CHAT" in sent_text
+        assert "FAVOURITE FOOD" in sent_text
+        assert "@everyone" in sent_text
+        assert "**SUBMISSION**" in sent_text
+        assert "deadline:" in sent_text
 
     @pytest.mark.asyncio
     @patch("weekly_slides_bot.save_state")
@@ -206,7 +285,13 @@ class TestCheckModAndAnnounce:
 
         await check_mod_and_announce(mock_client)
 
-        mock_channel.send.assert_called_once_with("GUESS CHAT New Topic")
+        mock_channel.send.assert_called_once()
+        sent_text = mock_channel.send.call_args.args[0]
+        assert "# GUESS CHAT" in sent_text
+        assert "NEW TOPIC" in sent_text
+        assert "@everyone" in sent_text
+        assert "**SUBMISSION**" in sent_text
+        assert "deadline:" in sent_text
 
     @pytest.mark.asyncio
     @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)
@@ -260,7 +345,13 @@ class TestCheckModAndAnnounce:
         await check_mod_and_announce(mock_client)
 
         # Only the GUESS CHAT announcement should be sent, no mod confirmation
-        mock_channel.send.assert_called_once_with("GUESS CHAT Movies")
+        mock_channel.send.assert_called_once()
+        sent_text = mock_channel.send.call_args.args[0]
+        assert "# GUESS CHAT" in sent_text
+        assert "MOVIES" in sent_text
+        assert "@everyone" in sent_text
+        assert "**SUBMISSION**" in sent_text
+        assert "deadline:" in sent_text
 
     @pytest.mark.asyncio
     @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)

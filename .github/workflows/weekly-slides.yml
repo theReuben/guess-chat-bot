@@ -113,6 +113,7 @@ jobs:
           DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
           TEMPLATE_DECK_ID: ${{ secrets.TEMPLATE_DECK_ID }}
           GOOGLE_CREDS_FILE: service_account.json
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python weekly_slides_bot.py
 
       - name: Save state to state branch

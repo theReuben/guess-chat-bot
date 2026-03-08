@@ -34,6 +34,7 @@ When a mod updates the submissions channel description to `Current Guess Chat: <
 - **API retry with backoff** — transient Google API errors (429, 500, 503) are retried with exponential backoff.
 - **Scheduled runs** — GitHub Actions triggers every Friday at 11:30 AM UK time (handles BST/GMT automatically).
 - **Manual trigger** — run from the GitHub Actions UI with an optional `force_reset` to start a fresh round.
+- **Fun facts generation** *(optional)* — uses Google Gemini to generate 3–5 fun bullet points about submission commonalities, outliers, and patterns. Inserted into the `{{FUNFACTS}}` placeholder on the title slide. Enabled by setting the `GEMINI_API_KEY` environment variable; disabled (placeholder cleared) when the key is absent.
 
 ---
 
@@ -81,10 +82,22 @@ When a mod updates the submissions channel description to `Current Guess Chat: <
 5. Generate a refresh token by running an OAuth flow (e.g. using `google-auth-oauthlib`'s `InstalledAppFlow`) with the scopes `https://www.googleapis.com/auth/presentations` and `https://www.googleapis.com/auth/drive`. Save the resulting token JSON (containing `client_id`, `client_secret`, `refresh_token`, and `token_uri`) as `oauth_token.json`.
 6. Create a folder in Google Drive to store the generated decks. Note the folder ID from the URL (`DRIVE_FOLDER_ID`).
 
+### Gemini API Key *(optional — for fun facts generation)*
+
+The bot can automatically generate fun facts about each round's submissions using the **Google Gemini** LLM. This feature is **optional** — if no key is set, the `{{FUNFACTS}}` placeholder is simply cleared.
+
+1. Go to [Google AI Studio](https://aistudio.google.com/apikey).
+2. Sign in with your Google account.
+3. Click **Create API key** and select (or create) a Google Cloud project.
+4. Copy the generated key — this is your `GEMINI_API_KEY`.
+5. Add it as a GitHub Actions secret (see [GitHub Secrets](#github-secrets) below) or to your `.env` file for local runs.
+
+> **Cost:** The Gemini API free tier allows **15 requests per minute** and **1,500 requests per day** for `gemini-2.0-flash` — more than enough for this bot, which makes one request per round. There is no charge unless you explicitly upgrade to a paid plan. See the [Gemini API pricing page](https://ai.google.dev/pricing) for current limits.
+
 ### Template Deck
 
 1. Create a new Google Slides presentation with **3 slides**:
-   - **Slide 1 (Title)**: add a text box containing `{{TOPIC}}` — this will be replaced with the round topic.
+   - **Slide 1 (Title)**: add a text box containing `{{TOPIC}}` — this will be replaced with the round topic. Optionally add a text box containing `{{FUNFACTS}}` — this will be filled with LLM-generated fun facts about the submissions (requires `GEMINI_API_KEY`; cleared if the feature is disabled).
    - **Slide 2 (Submission template)**: add text boxes containing `{{AUTHOR}}` and `{{BODY}}` — these are replaced for each submission; this slide is duplicated once per submission.
    - **Slide 3 (End)**: a static closing slide — no modifications.
 2. Share the presentation with your Google account (the one used for OAuth) as **Editor** (it likely already has access as the owner).
@@ -120,6 +133,7 @@ Add the following secrets to your repository (**Settings → Secrets and variabl
 | `DRIVE_FOLDER_ID` | Google Drive folder ID for generated decks |
 | `TEMPLATE_DECK_ID` | Google Slides template presentation ID |
 | `GOOGLE_OAUTH_TOKEN` | OAuth2 token JSON with `client_id`, `client_secret`, `refresh_token`, and `token_uri` |
+| `GEMINI_API_KEY` | *(optional)* Google Gemini API key — enables automatic fun facts generation on the title slide |
 
 The following environment variables are set automatically by the workflow or have sensible defaults. Override them in `.env` when running locally:
 
@@ -251,7 +265,7 @@ The slides guard uses a 30-minute grace window (12:00–12:29 UK) to survive Git
 
 ## Cost
 
-Running on GitHub Actions free tier: **$0/month**. Each run takes under a minute.
+Running on GitHub Actions free tier: **$0/month**. Each run takes under a minute. The optional Gemini fun-facts feature uses the free tier of the Gemini API (up to 1,500 requests/day for `gemini-2.0-flash`), so there is no additional cost.
 
 ---
 

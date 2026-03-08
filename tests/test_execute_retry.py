@@ -141,5 +141,5 @@ class TestExecuteWithRetryRefreshError:
         with pytest.raises(RefreshError):
             execute_with_retry(request)
         captured = capsys.readouterr()
-        assert "expired or revoked" in captured.out
+        assert "credential refresh failed" in captured.out
         assert "GOOGLE_OAUTH_TOKEN" in captured.out

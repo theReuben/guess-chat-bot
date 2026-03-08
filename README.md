@@ -34,6 +34,7 @@ When a mod updates the submissions channel description to `Current Guess Chat: <
 - **API retry with backoff** — transient Google API errors (429, 500, 503) are retried with exponential backoff.
 - **Scheduled runs** — GitHub Actions triggers every Friday at 11:30 AM UK time (handles BST/GMT automatically).
 - **Manual trigger** — run from the GitHub Actions UI with an optional `force_reset` to start a fresh round.
+- **Fun facts generation** *(optional)* — uses Google Gemini to generate 3–5 fun bullet points about submission commonalities, outliers, and patterns. Inserted into the `{{FUNFACTS}}` placeholder on the title slide. Enabled by setting the `GEMINI_API_KEY` environment variable; disabled (placeholder cleared) when the key is absent.
 
 ---
 
@@ -84,7 +85,7 @@ When a mod updates the submissions channel description to `Current Guess Chat: <
 ### Template Deck
 
 1. Create a new Google Slides presentation with **3 slides**:
-   - **Slide 1 (Title)**: add a text box containing `{{TOPIC}}` — this will be replaced with the round topic.
+   - **Slide 1 (Title)**: add a text box containing `{{TOPIC}}` — this will be replaced with the round topic. Optionally add a text box containing `{{FUNFACTS}}` — this will be filled with LLM-generated fun facts about the submissions (requires `GEMINI_API_KEY`; cleared if the feature is disabled).
    - **Slide 2 (Submission template)**: add text boxes containing `{{AUTHOR}}` and `{{BODY}}` — these are replaced for each submission; this slide is duplicated once per submission.
    - **Slide 3 (End)**: a static closing slide — no modifications.
 2. Share the presentation with your Google account (the one used for OAuth) as **Editor** (it likely already has access as the owner).
@@ -120,6 +121,7 @@ Add the following secrets to your repository (**Settings → Secrets and variabl
 | `DRIVE_FOLDER_ID` | Google Drive folder ID for generated decks |
 | `TEMPLATE_DECK_ID` | Google Slides template presentation ID |
 | `GOOGLE_OAUTH_TOKEN` | OAuth2 token JSON with `client_id`, `client_secret`, `refresh_token`, and `token_uri` |
+| `GEMINI_API_KEY` | *(optional)* Google Gemini API key — enables automatic fun facts generation on the title slide |
 
 The following environment variables are set automatically by the workflow or have sensible defaults. Override them in `.env` when running locally:
 

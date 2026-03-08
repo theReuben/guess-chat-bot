@@ -45,6 +45,7 @@ GOOGLE_CREDS_FILE = os.environ.get("GOOGLE_CREDS_FILE", "service_account.json")
 DRIVE_FOLDER_ID = os.environ.get("DRIVE_FOLDER_ID")
 STATE_FILE = os.environ.get("STATE_FILE", "state.json")
 TEMPLATE_DECK_ID = os.environ["TEMPLATE_DECK_ID"]
+GEMINI_API_KEY: str | None = os.environ.get("GEMINI_API_KEY")
 
 MARKER_PREFIX = "GUESS CHAT"
 SUBMISSION_PREFIX = "SUBMISSION"
@@ -689,6 +690,69 @@ def _video_requests(
 
 
 # ---------------------------------------------------------------------------
+# Fun facts generation (optional, requires GEMINI_API_KEY)
+# ---------------------------------------------------------------------------
+
+_GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+
+
+def generate_fun_facts(
+    topic: str,
+    submissions: list[dict],
+    conversation_messages: list[str] | None = None,
+) -> str:
+    """Generate fun facts about submissions using Google Gemini.
+
+    Returns a short block of bullet points suitable for inserting into the
+    title slide ``{{FUNFACTS}}`` placeholder.  If the feature is disabled
+    (no ``GEMINI_API_KEY``) or the API call fails, returns an empty string
+    so the placeholder is simply cleared.
+    """
+    if not GEMINI_API_KEY:
+        return ""
+
+    sub_texts = [sub["body"] for sub in submissions if sub.get("body")]
+    if not sub_texts:
+        return ""
+
+    sub_list = "\n".join(f"- {t}" for t in sub_texts)
+
+    prompt = (
+        f'Here are anonymous submissions for a guessing game about "{topic}".\n'
+        "Write 3–5 fun, short bullet points about commonalities, outliers, "
+        "or interesting patterns.\n"
+        "Do NOT mention any names or identifying information — keep everything "
+        "completely anonymous so as not to give away any answers.\n"
+        "Format each bullet point on its own line starting with \"• \".\n\n"
+        f"Submissions:\n{sub_list}"
+    )
+
+    if conversation_messages:
+        conv_list = "\n".join(f"- {m}" for m in conversation_messages)
+        prompt += (
+            "\n\nThe following are other messages from the conversation "
+            "(discussions, disagreements about submissions, etc.). "
+            "You may reference interesting discussion points but do NOT "
+            "include any names:\n"
+            f"{conv_list}"
+        )
+
+    url = f"{_GEMINI_URL}?key={GEMINI_API_KEY}"
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+
+    try:
+        resp = requests.post(url, json=payload, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+        print("[info] Fun facts generated successfully.")
+        return text.strip()
+    except Exception:  # noqa: BLE001
+        print("[warn] Failed to generate fun facts via Gemini API; placeholder will be cleared.")
+        return ""
+
+
+# ---------------------------------------------------------------------------
 # Slides building
 # ---------------------------------------------------------------------------
 
@@ -719,6 +783,7 @@ def build_deck(
     submissions: list[dict],
     named: bool,
     image_cache: dict[str, str],
+    fun_facts: str = "",
 ) -> list[dict]:
     """Populate a freshly copied presentation with submission slides.
 
@@ -727,23 +792,29 @@ def build_deck(
     """
     errors: list[dict] = []
 
-    # --- Replace {{TOPIC}} on title slide ---
+    # --- Replace {{TOPIC}} and {{FUNFACTS}} on title slide ---
     slide_ids = _get_slide_ids(slides_svc, pres_id)
     title_slide_id = slide_ids[0]
+    title_requests: list[dict] = [
+        {
+            "replaceAllText": {
+                "containsText": {"text": "{{TOPIC}}"},
+                "replaceText": topic,
+                "pageObjectIds": [title_slide_id],
+            }
+        },
+        {
+            "replaceAllText": {
+                "containsText": {"text": "{{FUNFACTS}}"},
+                "replaceText": fun_facts,
+                "pageObjectIds": [title_slide_id],
+            }
+        },
+    ]
     execute_with_retry(
         slides_svc.presentations().batchUpdate(
             presentationId=pres_id,
-            body={
-                "requests": [
-                    {
-                        "replaceAllText": {
-                            "containsText": {"text": "{{TOPIC}}"},
-                            "replaceText": topic,
-                            "pageObjectIds": [title_slide_id],
-                        }
-                    }
-                ]
-            },
+            body={"requests": title_requests},
         )
     )
 
@@ -1173,8 +1244,9 @@ async def generate_slides(client: discord.Client) -> None:
     marker_id = str(marker_msg.id)
     topic = extract_topic(marker_msg.content)
 
-    # --- Collect SUBMISSION messages after the marker ---
+    # --- Collect SUBMISSION messages and conversation after the marker ---
     all_submissions: list[dict] = []
+    conversation_messages: list[str] = []
     _member_cache: dict[int, discord.Member | None] = {}
     async for msg in channel.history(limit=1000, after=marker_msg):
         sub_match = _SUBMISSION_RE.match(msg.content)
@@ -1211,6 +1283,10 @@ async def generate_slides(client: discord.Client) -> None:
                     "youtube_ids": youtube_ids,
                 }
             )
+        elif msg.content.strip():
+            # Collect non-submission messages as conversation context
+            # (anonymised — no author names stored).
+            conversation_messages.append(msg.content.strip())
 
     if not all_submissions:
         # In preview mode, re-post the existing deck links from state so
@@ -1269,9 +1345,12 @@ async def generate_slides(client: discord.Client) -> None:
         image_cache: dict[str, str] = {}
 
         if new_round:
+            fun_facts = await asyncio.to_thread(
+                generate_fun_facts, topic, all_submissions, conversation_messages,
+            )
             print(f"[info] Building decks for {len(all_submissions)} submission(s).")
-            errors = await asyncio.to_thread(build_deck, slides_svc, drive_svc, named_pres_id, topic, all_submissions, named=True, image_cache=image_cache)
-            await asyncio.to_thread(build_deck, slides_svc, drive_svc, anon_pres_id, topic, all_submissions, named=False, image_cache=image_cache)
+            errors = await asyncio.to_thread(build_deck, slides_svc, drive_svc, named_pres_id, topic, all_submissions, named=True, image_cache=image_cache, fun_facts=fun_facts)
+            await asyncio.to_thread(build_deck, slides_svc, drive_svc, anon_pres_id, topic, all_submissions, named=False, image_cache=image_cache, fun_facts=fun_facts)
         else:
             print(f"[info] Appending {len(new_submissions)} new submission(s) to existing decks.")
             errors = await asyncio.to_thread(append_slides, slides_svc, drive_svc, named_pres_id, new_submissions, named=True, image_cache=image_cache)

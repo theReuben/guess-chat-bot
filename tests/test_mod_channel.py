@@ -18,6 +18,7 @@ os.environ.setdefault("TEMPLATE_DECK_ID", "tpl")
 import discord
 from weekly_slides_bot import (
     build_announcement_message,
+    _resolve_mod_mention,
     check_mod_and_announce,
     extract_topic,
     next_friday_deadline_unix,
@@ -208,6 +209,7 @@ class TestCheckModAndAnnounce:
         """Should not re-post if the topic hasn't changed."""
         mock_channel = MagicMock()
         mock_channel.topic = "Current Guess Chat: Favourite Food"
+        mock_channel.guild = None
         mock_channel.send = AsyncMock()
 
         mock_mod_channel = MagicMock()
@@ -232,6 +234,7 @@ class TestCheckModAndAnnounce:
         """When topic hasn't changed, send a reminder to the mod channel."""
         mock_channel = MagicMock()
         mock_channel.topic = "Current Guess Chat: Old Topic"
+        mock_channel.guild = None  # no guild → fallback mention
         mock_channel.send = AsyncMock()
 
         mock_mod_channel = MagicMock()
@@ -245,9 +248,10 @@ class TestCheckModAndAnnounce:
 
         await check_mod_and_announce(mock_client)
 
-        mock_mod_channel.send.assert_called_once_with(
-            "@Mods we haven't announced a new guess chat yet, is there a new one this week?"
-        )
+        mock_mod_channel.send.assert_called_once()
+        reminder = mock_mod_channel.send.call_args.args[0]
+        assert "haven't announced a new guess chat" in reminder.lower()
+        assert "new one this week" in reminder.lower()
         mock_channel.send.assert_not_called()
 
     @pytest.mark.asyncio
@@ -303,6 +307,7 @@ class TestCheckModAndAnnounce:
         mock_channel.send = AsyncMock(return_value=posted_msg)
         mock_channel.guild = MagicMock()
         mock_channel.guild.id = 99999
+        mock_channel.guild.roles = []  # no roles → fallback mention
 
         mock_mod_channel = MagicMock()
         mock_mod_channel.send = AsyncMock()
@@ -317,7 +322,6 @@ class TestCheckModAndAnnounce:
 
         mock_mod_channel.send.assert_called_once()
         confirmation = mock_mod_channel.send.call_args.args[0]
-        assert "@Mods" in confirmation
         assert "Favourite Food" in confirmation
         assert "extras" in confirmation.lower()
         assert "https://discord.com/channels/99999/1/12345" in confirmation
@@ -348,6 +352,144 @@ class TestCheckModAndAnnounce:
         assert "@everyone" in sent_text
         assert "**SUBMISSION**" in sent_text
         assert "deadline:" in sent_text
+
+    @pytest.mark.asyncio
+    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)
+    @patch("weekly_slides_bot.save_state")
+    @patch("weekly_slides_bot.load_state", return_value={})
+    async def test_confirmation_uses_role_mention_when_role_exists(self, _load, _save):
+        """Confirmation message uses <@&ROLE_ID> when the mod role is found in the guild."""
+        posted_msg = MagicMock()
+        posted_msg.id = 99
+
+        mod_role = MagicMock(spec=discord.Role)
+        mod_role.name = "Mod"
+        mod_role.id = 55555
+        mod_role.mention = "<@&55555>"
+
+        guild = MagicMock(spec=discord.Guild)
+        guild.id = 11111
+        guild.roles = [mod_role]
+
+        mock_channel = MagicMock()
+        mock_channel.topic = "Current Guess Chat: Cats"
+        mock_channel.send = AsyncMock(return_value=posted_msg)
+        mock_channel.guild = guild
+
+        mock_mod_channel = MagicMock()
+        mock_mod_channel.send = AsyncMock()
+
+        mock_client = MagicMock()
+        mock_client.get_channel.side_effect = lambda cid: {
+            1: mock_channel,
+            3: mock_mod_channel,
+        }.get(cid)
+
+        await check_mod_and_announce(mock_client)
+
+        mock_mod_channel.send.assert_called_once()
+        confirmation = mock_mod_channel.send.call_args.args[0]
+        assert "<@&55555>" in confirmation
+
+    @pytest.mark.asyncio
+    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)
+    @patch("weekly_slides_bot.save_state")
+    @patch("weekly_slides_bot.load_state", return_value={})
+    async def test_confirmation_falls_back_when_role_not_found(self, _load, _save):
+        """Confirmation message falls back to @MOD_ROLE_NAME when role is not in guild."""
+        posted_msg = MagicMock()
+        posted_msg.id = 88
+
+        guild = MagicMock(spec=discord.Guild)
+        guild.id = 22222
+        guild.roles = []  # no roles
+
+        mock_channel = MagicMock()
+        mock_channel.topic = "Current Guess Chat: Dogs"
+        mock_channel.send = AsyncMock(return_value=posted_msg)
+        mock_channel.guild = guild
+
+        mock_mod_channel = MagicMock()
+        mock_mod_channel.send = AsyncMock()
+
+        mock_client = MagicMock()
+        mock_client.get_channel.side_effect = lambda cid: {
+            1: mock_channel,
+            3: mock_mod_channel,
+        }.get(cid)
+
+        await check_mod_and_announce(mock_client)
+
+        mock_mod_channel.send.assert_called_once()
+        confirmation = mock_mod_channel.send.call_args.args[0]
+        # Should NOT contain a numeric role-mention form
+        assert "<@&" not in confirmation
+        # Should contain the plain @RoleName fallback
+        assert "@Mod" in confirmation
+
+    @pytest.mark.asyncio
+    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)
+    @patch("weekly_slides_bot.save_state")
+    @patch("weekly_slides_bot.load_state", return_value={"last_announced_topic": "Old"})
+    async def test_reminder_uses_role_mention_when_role_exists(self, _load, _save):
+        """Reminder message uses <@&ROLE_ID> when the mod role is found in the guild."""
+        mod_role = MagicMock(spec=discord.Role)
+        mod_role.name = "Mod"
+        mod_role.id = 44444
+        mod_role.mention = "<@&44444>"
+
+        guild = MagicMock(spec=discord.Guild)
+        guild.roles = [mod_role]
+
+        mock_channel = MagicMock()
+        mock_channel.topic = "Current Guess Chat: Old"
+        mock_channel.guild = guild
+        mock_channel.send = AsyncMock()
+
+        mock_mod_channel = MagicMock()
+        mock_mod_channel.send = AsyncMock()
+
+        mock_client = MagicMock()
+        mock_client.get_channel.side_effect = lambda cid: {
+            1: mock_channel,
+            3: mock_mod_channel,
+        }.get(cid)
+
+        await check_mod_and_announce(mock_client)
+
+        mock_mod_channel.send.assert_called_once()
+        reminder = mock_mod_channel.send.call_args.args[0]
+        assert "<@&44444>" in reminder
+
+
+class TestResolveModMention:
+    """Unit tests for the _resolve_mod_mention helper."""
+
+    def test_returns_role_mention_when_role_found(self):
+        """Returns role.mention when the role exists in the guild."""
+        mod_role = MagicMock(spec=discord.Role)
+        mod_role.name = "Mod"
+        mod_role.mention = "<@&12345>"
+
+        guild = MagicMock(spec=discord.Guild)
+        guild.roles = [mod_role]
+
+        assert _resolve_mod_mention(guild) == "<@&12345>"
+
+    def test_returns_fallback_when_role_not_found(self):
+        """Returns @MOD_ROLE_NAME when no matching role exists."""
+        guild = MagicMock(spec=discord.Guild)
+        guild.roles = []
+
+        result = _resolve_mod_mention(guild)
+        assert result.startswith("@")
+        assert "<@&" not in result
+
+    def test_returns_fallback_when_guild_is_none(self):
+        """Returns @MOD_ROLE_NAME when guild is None."""
+        result = _resolve_mod_mention(None)
+        assert result.startswith("@")
+        assert "<@&" not in result
 
 
 class TestMarkerFallback:

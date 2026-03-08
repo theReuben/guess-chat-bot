@@ -13,6 +13,7 @@ os.environ.setdefault("DISCORD_CHANNEL_ID", "1")
 os.environ.setdefault("DISCORD_RESULTS_CHANNEL_ID", "2")
 os.environ.setdefault("TEMPLATE_DECK_ID", "tpl")
 
+from google.auth.exceptions import RefreshError
 from googleapiclient.errors import HttpError
 
 from weekly_slides_bot import execute_with_retry
@@ -122,3 +123,23 @@ class TestExecuteWithRetryBackoff:
         assert 1.0 <= waits[0] < 2.0  # 2^0 + jitter
         assert 2.0 <= waits[1] < 3.0  # 2^1 + jitter
         assert 4.0 <= waits[2] < 5.0  # 2^2 + jitter
+
+
+class TestExecuteWithRetryRefreshError:
+    """RefreshError (expired/revoked token) is not retried."""
+
+    def test_raises_immediately_on_refresh_error(self):
+        request = MagicMock()
+        request.execute.side_effect = RefreshError("invalid_grant: Token has been expired or revoked.")
+        with pytest.raises(RefreshError):
+            execute_with_retry(request)
+        request.execute.assert_called_once()
+
+    def test_prints_actionable_message(self, capsys):
+        request = MagicMock()
+        request.execute.side_effect = RefreshError("invalid_grant")
+        with pytest.raises(RefreshError):
+            execute_with_retry(request)
+        captured = capsys.readouterr()
+        assert "expired or revoked" in captured.out
+        assert "GOOGLE_OAUTH_TOKEN" in captured.out

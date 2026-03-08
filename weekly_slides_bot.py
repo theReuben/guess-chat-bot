@@ -27,6 +27,7 @@ from typing import Any
 import discord
 import requests
 from google.auth.exceptions import RefreshError
+from google.auth.transport.requests import Request as AuthRequest
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -339,8 +340,6 @@ def get_google_services():
     # Eagerly refresh the token so we fail fast with a clear message
     # instead of crashing deep inside the first API call.
     try:
-        from google.auth.transport.requests import Request as AuthRequest
-
         creds.refresh(AuthRequest())
     except RefreshError:
         print(

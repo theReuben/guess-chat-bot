@@ -138,3 +138,71 @@ class TestGetGoogleServicesServiceAccount:
         ):
             with pytest.raises(RefreshError):
                 get_google_services()
+
+    @patch("weekly_slides_bot.build")
+    @patch("builtins.open", mock_open(read_data=_FAKE_SA_DATA))
+    def test_service_account_refresh_error_prints_sa_message(self, _mock_build, capsys):
+        mock_creds = MagicMock()
+        mock_creds.refresh.side_effect = RefreshError("transport error")
+        with patch(
+            "weekly_slides_bot.ServiceAccountCredentials.from_service_account_info",
+            return_value=mock_creds,
+        ):
+            with pytest.raises(RefreshError):
+                get_google_services()
+        captured = capsys.readouterr()
+        assert "Service-account credentials failed" in captured.out
+
+
+class TestGetGoogleServicesUnrecognisedFormat:
+    """get_google_services rejects unrecognised credential file formats."""
+
+    def test_oauth_client_config_raises_value_error(self):
+        """An OAuth client-config JSON (with 'installed' key) is rejected."""
+        bad_data = json.dumps({"installed": {"client_id": "x", "client_secret": "y"}})
+        with patch("builtins.open", mock_open(read_data=bad_data)):
+            with pytest.raises(ValueError, match="Unrecognised credential file format"):
+                get_google_services()
+
+    def test_oauth_client_config_hint_mentions_installed(self):
+        bad_data = json.dumps({"installed": {"client_id": "x"}})
+        with patch("builtins.open", mock_open(read_data=bad_data)):
+            with pytest.raises(ValueError) as exc_info:
+                get_google_services()
+        assert "installed" in str(exc_info.value)
+
+    def test_web_client_config_raises_value_error(self):
+        bad_data = json.dumps({"web": {"client_id": "x", "client_secret": "y"}})
+        with patch("builtins.open", mock_open(read_data=bad_data)):
+            with pytest.raises(ValueError, match="Unrecognised credential file format"):
+                get_google_services()
+
+    def test_empty_json_raises_value_error(self):
+        with patch("builtins.open", mock_open(read_data="{}")):
+            with pytest.raises(ValueError, match="Unrecognised credential file format"):
+                get_google_services()
+
+    def test_unknown_type_raises_value_error(self):
+        bad_data = json.dumps({"type": "something_else"})
+        with patch("builtins.open", mock_open(read_data=bad_data)):
+            with pytest.raises(ValueError, match="Unrecognised credential file format"):
+                get_google_services()
+
+
+class TestGetGoogleServicesAuthorizedUser:
+    """get_google_services supports authorized_user type credentials."""
+
+    _FAKE_AUTH_USER_DATA = json.dumps({
+        "type": "authorized_user",
+        "client_id": "fake-client-id",
+        "client_secret": "fake-client-secret",
+        "refresh_token": "fake-refresh-token",
+    })
+
+    @patch("weekly_slides_bot.build")
+    @patch("builtins.open", mock_open(read_data=_FAKE_AUTH_USER_DATA))
+    def test_authorized_user_credentials_used(self, mock_build):
+        mock_build.return_value = MagicMock()
+        with patch("google.oauth2.credentials.Credentials.refresh"):
+            slides, drive = get_google_services()
+        assert mock_build.call_count == 2

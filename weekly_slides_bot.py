@@ -306,9 +306,9 @@ def execute_with_retry(request, max_retries: int = 5) -> Any:
             return request.execute()
         except RefreshError as exc:
             print(
-                "[error] Google OAuth token is expired or revoked. "
-                "Please regenerate your refresh token and update the "
-                "GOOGLE_OAUTH_TOKEN secret."
+                "[error] Google credential refresh failed during API call. "
+                "Please check the credentials file configured via GOOGLE_CREDS_FILE "
+                "and, in CI, the GOOGLE_OAUTH_TOKEN secret that populates it."
             )
             raise
         except HttpError as exc:
@@ -336,11 +336,15 @@ def get_google_services():
     with open(GOOGLE_CREDS_FILE) as f:
         token_data = json.load(f)
 
-    if token_data.get("type") == "service_account":
+    cred_type = token_data.get("type")
+
+    if cred_type == "service_account":
+        print("[info] Using service-account credentials.")
         creds = ServiceAccountCredentials.from_service_account_info(
             token_data, scopes=GOOGLE_SCOPES
         )
-    else:
+    elif cred_type == "authorized_user":
+        print("[info] Using authorized-user (OAuth2) credentials.")
         creds = Credentials(
             token=None,
             refresh_token=token_data["refresh_token"],
@@ -348,17 +352,54 @@ def get_google_services():
             client_secret=token_data["client_secret"],
             token_uri=token_data.get("token_uri", "https://oauth2.googleapis.com/token"),
         )
+    elif not cred_type and "refresh_token" in token_data:
+        print("[info] Using OAuth2 user credentials (legacy format).")
+        creds = Credentials(
+            token=None,
+            refresh_token=token_data["refresh_token"],
+            client_id=token_data["client_id"],
+            client_secret=token_data["client_secret"],
+            token_uri=token_data.get("token_uri", "https://oauth2.googleapis.com/token"),
+        )
+    else:
+        # Detect common mistakes: OAuth client-config files have "installed"
+        # or "web" top-level keys instead of credential fields.
+        hint = ""
+        if "installed" in token_data or "web" in token_data:
+            hint = (
+                " The file looks like an OAuth client-config JSON "
+                "(it contains an 'installed' or 'web' key). "
+                "You need to provide a service-account key JSON or "
+                "an authorized-user credentials JSON instead."
+            )
+        msg = (
+            f"[error] Unrecognised credential file format "
+            f"(type={cred_type!r}).{hint} "
+            f"Please check the credentials file configured via GOOGLE_CREDS_FILE "
+            f"and, in CI, the GOOGLE_OAUTH_TOKEN secret that populates it."
+        )
+        raise ValueError(msg)
 
     # Eagerly refresh the token so we fail fast with a clear message
     # instead of crashing deep inside the first API call.
     try:
         creds.refresh(AuthRequest())
     except RefreshError:
-        print(
-            "[error] Google OAuth token is expired or revoked. "
-            "Please regenerate your refresh token and update the "
-            "GOOGLE_OAUTH_TOKEN secret."
-        )
+        if cred_type == "service_account":
+            print(
+                "[error] Service-account credentials failed to authenticate. "
+                "The key may be deleted or the service account disabled. "
+                "Please regenerate the key in the Google Cloud console and "
+                "update the credentials file (GOOGLE_CREDS_FILE) or, in CI, "
+                "the GOOGLE_OAUTH_TOKEN secret."
+            )
+        else:
+            print(
+                "[error] Google OAuth token is expired or revoked. "
+                "Please regenerate your refresh token and update the "
+                "credentials file (GOOGLE_CREDS_FILE) or, in CI, "
+                "the GOOGLE_OAUTH_TOKEN secret."
+            )
         raise
     slides = build("slides", "v1", credentials=creds)
     drive = build("drive", "v3", credentials=creds)

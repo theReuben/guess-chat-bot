@@ -12,12 +12,14 @@ One-shot Discord bot that:
 from __future__ import annotations
 
 import asyncio
+import datetime
 import io
 import json
 import os
 import random
 import re
 import time
+import zoneinfo
 from pathlib import Path
 from typing import Any
 
@@ -104,6 +106,53 @@ def parse_channel_topic(description: str | None) -> str | None:
         return None
     m = _CHANNEL_TOPIC_RE.match(description.strip())
     return m.group(1).strip() if m else None
+
+
+_UK_TZ = zoneinfo.ZoneInfo("Europe/London")
+_DEADLINE_HOUR = 11
+_DEADLINE_MINUTE = 30
+
+
+def next_friday_deadline_unix(reference_utc: datetime.datetime | None = None) -> int:
+    """Return the Unix timestamp of the next Friday at 11:30 UK time.
+
+    If *reference_utc* is not provided, ``datetime.datetime.now(UTC)`` is used.
+    When the reference time is already on a Friday but before 11:30 UK, the
+    deadline is set to the same Friday.  Otherwise it is set to the next
+    occurring Friday.
+    """
+    now_utc = reference_utc or datetime.datetime.now(datetime.timezone.utc)
+    now_uk = now_utc.astimezone(_UK_TZ)
+    days_until_friday = (4 - now_uk.weekday()) % 7  # weekday 4 == Friday
+    if days_until_friday == 0:
+        # Today is Friday — use next week if we're already at or past the deadline time
+        if now_uk.hour > _DEADLINE_HOUR or (
+            now_uk.hour == _DEADLINE_HOUR and now_uk.minute >= _DEADLINE_MINUTE
+        ):
+            days_until_friday = 7
+    target_date = now_uk.date() + datetime.timedelta(days=days_until_friday)
+    deadline_uk = datetime.datetime(
+        target_date.year,
+        target_date.month,
+        target_date.day,
+        _DEADLINE_HOUR,
+        _DEADLINE_MINUTE,
+        0,
+        tzinfo=_UK_TZ,
+    )
+    return int(deadline_uk.timestamp())
+
+
+def build_announcement_message(topic: str) -> str:
+    """Build the formatted announcement message for a new Guess Chat round."""
+    deadline_ts = next_friday_deadline_unix()
+    return (
+        f"# GUESS CHAT\n"
+        f"# {topic.upper()}\n"
+        f"- @everyone\n"
+        f"- tag with **SUBMISSION**\n"
+        f"- deadline: <t:{deadline_ts}:F>"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1321,7 +1370,7 @@ async def check_mod_and_announce(client: discord.Client) -> None:
         return
 
     # --- Post the GUESS CHAT announcement ---
-    posted_msg = await submissions_channel.send(f"GUESS CHAT {topic}")
+    posted_msg = await submissions_channel.send(build_announcement_message(topic))
     print(f"[info] Posted GUESS CHAT announcement for topic '{topic}'.")
 
     # --- Send confirmation to mod channel ---

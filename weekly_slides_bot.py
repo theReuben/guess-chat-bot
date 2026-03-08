@@ -307,7 +307,8 @@ def execute_with_retry(request, max_retries: int = 5) -> Any:
         except RefreshError as exc:
             print(
                 "[error] Google credential refresh failed during API call. "
-                "Please check the GOOGLE_OAUTH_TOKEN secret."
+                "Please check the credentials file configured via GOOGLE_CREDS_FILE "
+                "and, in CI, the GOOGLE_OAUTH_TOKEN secret that populates it."
             )
             raise
         except HttpError as exc:
@@ -374,7 +375,8 @@ def get_google_services():
         msg = (
             f"[error] Unrecognised credential file format "
             f"(type={cred_type!r}).{hint} "
-            f"Please check the GOOGLE_OAUTH_TOKEN secret."
+            f"Please check the credentials file configured via GOOGLE_CREDS_FILE "
+            f"and, in CI, the GOOGLE_OAUTH_TOKEN secret that populates it."
         )
         raise ValueError(msg)
 
@@ -388,13 +390,15 @@ def get_google_services():
                 "[error] Service-account credentials failed to authenticate. "
                 "The key may be deleted or the service account disabled. "
                 "Please regenerate the key in the Google Cloud console and "
-                "update the GOOGLE_OAUTH_TOKEN secret."
+                "update the credentials file (GOOGLE_CREDS_FILE) or, in CI, "
+                "the GOOGLE_OAUTH_TOKEN secret."
             )
         else:
             print(
                 "[error] Google OAuth token is expired or revoked. "
                 "Please regenerate your refresh token and update the "
-                "GOOGLE_OAUTH_TOKEN secret."
+                "credentials file (GOOGLE_CREDS_FILE) or, in CI, "
+                "the GOOGLE_OAUTH_TOKEN secret."
             )
         raise
     slides = build("slides", "v1", credentials=creds)

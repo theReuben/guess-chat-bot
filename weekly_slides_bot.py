@@ -1677,7 +1677,7 @@ class OneShotClient(discord.Client):
                 await generate_slides(self)
         except Exception as exc:
             print(f"[error] Unhandled exception in on_ready: {exc}")
-            create_github_issue(exc)
+            await asyncio.to_thread(create_github_issue, exc)
             raise
         finally:
             await self.close()

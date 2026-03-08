@@ -338,7 +338,7 @@ def get_google_services():
 
     if token_data.get("type") == "service_account":
         creds = ServiceAccountCredentials.from_service_account_info(
-            token_data, scopes=GOOGLE_SCOPES,
+            token_data, scopes=GOOGLE_SCOPES
         )
     else:
         creds = Credentials(

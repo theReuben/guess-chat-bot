@@ -215,7 +215,7 @@ def create_github_issue(exc: BaseException) -> None:
 
     api_url = f"https://api.github.com/repos/{GITHUB_REPOSITORY}"
     headers = {
-        "Authorization": f"token {GITHUB_TOKEN}",
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
         "Accept": "application/vnd.github+json",
     }
 
@@ -1646,7 +1646,7 @@ class OneShotClient(discord.Client):
                 await generate_slides(self)
         except Exception as exc:
             print(f"[error] Unhandled exception in on_ready: {exc}")
-            await asyncio.to_thread(create_github_issue, exc)
+            create_github_issue(exc)
             raise
         finally:
             await self.close()

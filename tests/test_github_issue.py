@@ -24,6 +24,7 @@ from weekly_slides_bot import create_github_issue, OneShotClient
 class TestCreateGithubIssue:
     """Tests for the create_github_issue helper."""
 
+    @patch("weekly_slides_bot.GITHUB_REPOSITORY", "owner/repo")
     @patch("weekly_slides_bot.GITHUB_TOKEN", None)
     def test_skips_when_token_missing(self, capsys):
         """No API call when GITHUB_TOKEN is not set."""
@@ -80,6 +81,7 @@ class TestCreateGithubIssue:
         create_github_issue(exc)
 
         # post is never called for an issue (label creation also not reached)
+        mock_post.assert_not_called()
         output = capsys.readouterr().out
         assert "Duplicate issue already open: #7" in output
 

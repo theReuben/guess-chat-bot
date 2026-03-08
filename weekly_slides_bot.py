@@ -1148,7 +1148,7 @@ async def generate_slides(client: discord.Client) -> None:
 
     if not all_submissions:
         # In preview/test_slides mode, re-post the existing deck links from state so
-        # that mods can always verify the pipeline is working.
+        # that the pipeline can always be verified.
         if BOT_MODE in ("preview", "test_slides") and state.get("named_pres_id"):
             print("[info] No SUBMISSION messages found — re-posting existing deck links.")
             named_pres_id = state["named_pres_id"]

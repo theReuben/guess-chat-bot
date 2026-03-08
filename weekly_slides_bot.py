@@ -29,6 +29,7 @@ import requests
 from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request as AuthRequest
 from google.oauth2.credentials import Credentials
+from google.oauth2.service_account import Credentials as ServiceAccountCredentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseUpload
@@ -47,6 +48,10 @@ DISCORD_TEST_CHANNEL_ID: int | None = int(_TEST_CHANNEL_RAW) if _TEST_CHANNEL_RA
 MOD_ROLE_NAME = os.environ.get("MOD_ROLE_NAME", "Mod")
 BOT_MODE = os.environ.get("BOT_MODE", "slides")
 GOOGLE_CREDS_FILE = os.environ.get("GOOGLE_CREDS_FILE", "service_account.json")
+GOOGLE_SCOPES = [
+    "https://www.googleapis.com/auth/presentations",
+    "https://www.googleapis.com/auth/drive",
+]
 DRIVE_FOLDER_ID = os.environ.get("DRIVE_FOLDER_ID")
 STATE_FILE = os.environ.get("STATE_FILE", "state.json")
 TEMPLATE_DECK_ID = os.environ["TEMPLATE_DECK_ID"]
@@ -330,13 +335,20 @@ def execute_with_retry(request, max_retries: int = 5) -> Any:
 def get_google_services():
     with open(GOOGLE_CREDS_FILE) as f:
         token_data = json.load(f)
-    creds = Credentials(
-        token=None,
-        refresh_token=token_data["refresh_token"],
-        client_id=token_data["client_id"],
-        client_secret=token_data["client_secret"],
-        token_uri=token_data.get("token_uri", "https://oauth2.googleapis.com/token"),
-    )
+
+    if token_data.get("type") == "service_account":
+        creds = ServiceAccountCredentials.from_service_account_info(
+            token_data, scopes=GOOGLE_SCOPES,
+        )
+    else:
+        creds = Credentials(
+            token=None,
+            refresh_token=token_data["refresh_token"],
+            client_id=token_data["client_id"],
+            client_secret=token_data["client_secret"],
+            token_uri=token_data.get("token_uri", "https://oauth2.googleapis.com/token"),
+        )
+
     # Eagerly refresh the token so we fail fast with a clear message
     # instead of crashing deep inside the first API call.
     try:

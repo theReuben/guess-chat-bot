@@ -58,7 +58,7 @@ When a mod updates the submissions channel description to `Current Guess Chat: <
 - **Python 3.10+**
 - A **Discord bot** with the Message Content intent enabled.
 - A **Google Cloud project** with the Slides API and Drive API enabled.
-- A **Google OAuth2 Desktop App** client ID and a refresh token for your personal Google account.
+- A **Google service account** (recommended) or an **OAuth2 Desktop App** client ID with a refresh token.
 
 ---
 
@@ -78,10 +78,25 @@ When a mod updates the submissions channel description to `Current Guess Chat: <
 
 1. Go to the [Google Cloud Console](https://console.cloud.google.com/) and create or select a project.
 2. Enable the **Google Slides API** and **Google Drive API**.
+
+#### Option A — Service Account (recommended)
+
+Service account credentials do not expire, avoiding the `RefreshError: Token has been expired or revoked` issue that can occur with OAuth2 user tokens.
+
+3. Go to **APIs & Services → Credentials**, click **Create Credentials → Service account**.
+4. Give the service account a name, then go to the **Keys** tab and click **Add Key → Create new key → JSON**.
+5. Download the JSON key file — this is your `GOOGLE_CREDS_FILE` (default name: `service_account.json`).
+6. Share the Google Drive folder (and the template deck) with the service account email address (found in the JSON as `client_email`).
+7. Create a folder in Google Drive to store the generated decks. Note the folder ID from the URL (`DRIVE_FOLDER_ID`).
+
+#### Option B — OAuth2 User Credentials
+
 3. Go to **APIs & Services → OAuth consent screen**, configure it (External type), and add your Google account as a test user.
 4. Go to **APIs & Services → Credentials**, click **Create Credentials → OAuth client ID**, choose **Desktop app**, and download the JSON as `oauth_client.json`.
 5. Generate a refresh token by running an OAuth flow (e.g. using `google-auth-oauthlib`'s `InstalledAppFlow`) with the scopes `https://www.googleapis.com/auth/presentations` and `https://www.googleapis.com/auth/drive`. Save the resulting token JSON (containing `client_id`, `client_secret`, `refresh_token`, and `token_uri`) as `oauth_token.json`.
 6. Create a folder in Google Drive to store the generated decks. Note the folder ID from the URL (`DRIVE_FOLDER_ID`).
+
+> **Note:** OAuth2 refresh tokens for apps in "Testing" mode expire after 7 days. If you see `RefreshError: Token has been expired or revoked`, either re-run the OAuth flow or switch to a service account.
 
 ### Gemini API Key *(optional — for fun facts generation)*
 
@@ -297,7 +312,7 @@ Tests use `unittest.mock` (`MagicMock`, `AsyncMock`, `patch`) to mock all Discor
 | Double-run on DST change | The DST guard handles this; check the workflow logs for "skipping this scheduled run" |
 | Bot skipped due to runner delay | The slides guard tolerates up to 30 min of GitHub Actions delay (accepts UK 12:00–12:29); if a run was still skipped, trigger it manually via **Actions → Run workflow** |
 | State branch missing | It is created automatically on the first successful run |
-| `RefreshError: Token has been expired or revoked` | Your Google OAuth token needs refreshing — re-run the OAuth consent flow and update the `GOOGLE_OAUTH_TOKEN` secret. When `GITHUB_TOKEN` and `GITHUB_REPOSITORY` are set, the bot automatically creates a GitHub issue for this error |
+| `RefreshError: Token has been expired or revoked` | Your Google OAuth token needs refreshing — re-run the OAuth consent flow and update the `GOOGLE_OAUTH_TOKEN` secret, or switch to a **service account** (recommended) which does not suffer from token expiry. When `GITHUB_TOKEN` and `GITHUB_REPOSITORY` are set, the bot automatically creates a GitHub issue for this error |
 
 ---
 

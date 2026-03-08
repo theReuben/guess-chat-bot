@@ -188,8 +188,9 @@ def create_github_issue(exc: BaseException) -> None:
     """Create a GitHub issue for an unhandled bot exception.
 
     Requires ``GITHUB_TOKEN`` and ``GITHUB_REPOSITORY`` environment variables.
-    If either is missing the function silently returns.  Duplicate open issues
-    with the same title are avoided by searching before creating.
+    If either is missing a warning is printed and the function returns.
+    Duplicate open issues with the same title are avoided by searching
+    before creating.
     """
     if not GITHUB_TOKEN or not GITHUB_REPOSITORY:
         print("[warn] GITHUB_TOKEN or GITHUB_REPOSITORY not set; skipping issue creation.")

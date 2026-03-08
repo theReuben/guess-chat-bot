@@ -387,86 +387,90 @@ def _get_shape_text(elem: dict) -> str:
     return "".join(parts)
 
 
-def _find_body_element(page_elements: list[dict]) -> dict | None:
-    """Return the body text box element (largest shape below the author bar).
-
-    Falls back to text-content identification when no shapes are found at
-    the expected vertical position.
-    """
-    shapes = [elem for elem in page_elements if elem.get("shape")]
-
-    def _by_area(e: dict) -> float:
-        return (
-            e.get("size", {}).get("width", {}).get("magnitude", 0)
-            * e.get("size", {}).get("height", {}).get("magnitude", 0)
-        )
-
-    # Primary: shapes below the author bar threshold
-    candidates = [
-        elem for elem in shapes
-        if elem.get("transform", {}).get("translateY", 0) / _PT >= _AUTHOR_BAR_PT - _BODY_Y_TOLERANCE_PT
-    ]
-    if candidates:
-        return max(candidates, key=_by_area)
-
-    # Fallback: largest non-author shape whose text does not start with "Answer:"
-    candidates = []
-    author_elem = _find_author_element(page_elements)
-    author_id = author_elem.get("objectId") if author_elem else None
-    for elem in shapes:
-        # Skip the author box if we were able to identify it
-        if author_id is not None and elem.get("objectId") == author_id:
-            continue
-        txt = _get_shape_text(elem).strip()
-        # Allow empty body placeholders, but avoid the "Answer:" box
-        if not txt.startswith("Answer:"):
-            candidates.append(elem)
-    if candidates:
-        return max(candidates, key=_by_area)
-
-    return None
+def _elem_area(e: dict) -> float:
+    """Return the rendered area (width × height) of a page element in EMU²."""
+    return (
+        e.get("size", {}).get("width", {}).get("magnitude", 0)
+        * e.get("size", {}).get("height", {}).get("magnitude", 0)
+    )
 
 
 def _find_author_element(page_elements: list[dict]) -> dict | None:
-    """Return the author text box element (shape in the author bar area).
+    """Return the author text box element.
 
-    Falls back to text-content identification when no shapes are found at
-    the expected vertical position.
+    Strategy (most-reliable first):
+    1. Shape whose text starts with "Answer:" — this is explicit and layout-independent.
+    2. Largest shape physically inside the author bar area (y < threshold).
     """
     shapes = [elem for elem in page_elements if elem.get("shape")]
 
-    def _by_area(e: dict) -> float:
-        return (
-            e.get("size", {}).get("width", {}).get("magnitude", 0)
-            * e.get("size", {}).get("height", {}).get("magnitude", 0)
-        )
-
-    # Primary: shapes above the author bar threshold
-    candidates = [
-        elem for elem in shapes
-        if elem.get("transform", {}).get("translateY", 0) / _PT < _AUTHOR_BAR_PT - _BODY_Y_TOLERANCE_PT
-    ]
-    if candidates:
-        return max(candidates, key=_by_area)
-
-    # Fallback: shape whose text starts with "Answer:"
+    # Primary: shape whose text starts with "Answer:" (explicit content signal)
     candidates = [
         elem for elem in shapes
         if _get_shape_text(elem).strip().startswith("Answer:")
     ]
     if candidates:
-        return max(candidates, key=_by_area)
+        return max(candidates, key=_elem_area)
+
+    # Fallback: largest shape above the author bar threshold (position-based)
+    candidates = [
+        elem for elem in shapes
+        if elem.get("transform", {}).get("translateY", 0) / _PT < _AUTHOR_BAR_PT - _BODY_Y_TOLERANCE_PT
+    ]
+    if candidates:
+        return max(candidates, key=_elem_area)
+
+    return None
+
+
+def _find_body_element(page_elements: list[dict]) -> dict | None:
+    """Return the body text box element.
+
+    The author element is identified first and excluded from all searches so
+    that an author bar placed at an unusual vertical position never gets
+    mistakenly returned as the body.
+
+    Strategy (most-reliable first):
+    1. Largest non-author shape below the author bar threshold (position-based).
+    2. Largest non-author shape whose text does not start with "Answer:" (content
+       fallback for slides whose layout does not match the expected positions).
+    """
+    shapes = [elem for elem in page_elements if elem.get("shape")]
+
+    author_elem = _find_author_element(page_elements)
+    author_id = author_elem.get("objectId") if author_elem else None
+    non_author = [s for s in shapes if s.get("objectId") != author_id]
+
+    # Primary: largest non-author shape below the author bar threshold
+    candidates = [
+        elem for elem in non_author
+        if elem.get("transform", {}).get("translateY", 0) / _PT >= _AUTHOR_BAR_PT - _BODY_Y_TOLERANCE_PT
+    ]
+    if candidates:
+        return max(candidates, key=_elem_area)
+
+    # Fallback: largest non-author shape whose text does not start with "Answer:"
+    candidates = [
+        elem for elem in non_author
+        if not _get_shape_text(elem).strip().startswith("Answer:")
+    ]
+    if candidates:
+        return max(candidates, key=_elem_area)
 
     return None
 
 
 def _body_resize_requests(page_elements: list[dict], has_images: bool) -> list[dict]:
-    """Return updatePageElementTransform requests to resize the body text box.
+    """Return batchUpdate requests to resize the body text box and enable auto-shrink.
 
     When *has_images* is False (text-only submission) the body text box is
     expanded to fill the full available content area of the slide.  When
     *has_images* is True the body text box is constrained to the left portion
     of the slide so that it does not overlap with images on the right.
+
+    A ``SHRINK_TEXT_ON_OVERFLOW`` autofit property is also applied so that
+    long submissions shrink their text to fit within the box rather than
+    overflowing and obscuring other elements.
     """
     elem = _find_body_element(page_elements)
     if elem is None:
@@ -497,7 +501,22 @@ def _body_resize_requests(page_elements: list[dict], has_images: bool) -> list[d
                 },
                 "applyMode": "ABSOLUTE",
             }
-        }
+        },
+        {
+            "updateShapeProperties": {
+                "objectId": elem["objectId"],
+                "shapeProperties": {
+                    # SHRINK_TEXT_ON_OVERFLOW is a Google Slides API autofit mode
+                    # that automatically reduces the font size when the text content
+                    # exceeds the shape's boundaries, preventing overlap with adjacent
+                    # images or the author bar.
+                    "autofit": {
+                        "autofitType": "SHRINK_TEXT_ON_OVERFLOW",
+                    }
+                },
+                "fields": "autofit.autofitType",
+            }
+        },
     ]
 
 

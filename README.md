@@ -82,6 +82,18 @@ When a mod updates the submissions channel description to `Current Guess Chat: <
 5. Generate a refresh token by running an OAuth flow (e.g. using `google-auth-oauthlib`'s `InstalledAppFlow`) with the scopes `https://www.googleapis.com/auth/presentations` and `https://www.googleapis.com/auth/drive`. Save the resulting token JSON (containing `client_id`, `client_secret`, `refresh_token`, and `token_uri`) as `oauth_token.json`.
 6. Create a folder in Google Drive to store the generated decks. Note the folder ID from the URL (`DRIVE_FOLDER_ID`).
 
+### Gemini API Key *(optional — for fun facts generation)*
+
+The bot can automatically generate fun facts about each round's submissions using the **Google Gemini** LLM. This feature is **optional** — if no key is set, the `{{FUNFACTS}}` placeholder is simply cleared.
+
+1. Go to [Google AI Studio](https://aistudio.google.com/apikey).
+2. Sign in with your Google account.
+3. Click **Create API key** and select (or create) a Google Cloud project.
+4. Copy the generated key — this is your `GEMINI_API_KEY`.
+5. Add it as a GitHub Actions secret (see [GitHub Secrets](#github-secrets) below) or to your `.env` file for local runs.
+
+> **Cost:** The Gemini API free tier allows **15 requests per minute** and **1,500 requests per day** for `gemini-2.0-flash` — more than enough for this bot, which makes one request per round. There is no charge unless you explicitly upgrade to a paid plan. See the [Gemini API pricing page](https://ai.google.dev/pricing) for current limits.
+
 ### Template Deck
 
 1. Create a new Google Slides presentation with **3 slides**:
@@ -253,7 +265,7 @@ The slides guard uses a 30-minute grace window (12:00–12:29 UK) to survive Git
 
 ## Cost
 
-Running on GitHub Actions free tier: **$0/month**. Each run takes under a minute.
+Running on GitHub Actions free tier: **$0/month**. Each run takes under a minute. The optional Gemini fun-facts feature uses the free tier of the Gemini API (up to 1,500 requests/day for `gemini-2.0-flash`), so there is no additional cost.
 
 ---
 

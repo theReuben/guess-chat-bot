@@ -1427,7 +1427,7 @@ async def check_mod_and_announce(client: discord.Client) -> None:
             return
     else:
         announce_channel = submissions_channel
-    posted_msg = await submissions_channel.send(build_announcement_message(topic))
+    posted_msg = await announce_channel.send(build_announcement_message(topic))
     print(f"[info] Posted GUESS CHAT announcement for topic '{topic}'.")
 
     # --- Send confirmation ---

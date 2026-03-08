@@ -26,6 +26,7 @@ from typing import Any
 
 import discord
 import requests
+from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -297,6 +298,13 @@ def execute_with_retry(request, max_retries: int = 5) -> Any:
     for attempt in range(max_retries + 1):
         try:
             return request.execute()
+        except RefreshError as exc:
+            print(
+                "[error] Google OAuth token is expired or revoked. "
+                "Please regenerate your refresh token and update the "
+                "GOOGLE_OAUTH_TOKEN secret."
+            )
+            raise
         except HttpError as exc:
             status = exc.resp.status
             retryable = status in _RETRYABLE_STATUS_CODES or (
@@ -328,6 +336,19 @@ def get_google_services():
         client_secret=token_data["client_secret"],
         token_uri=token_data.get("token_uri", "https://oauth2.googleapis.com/token"),
     )
+    # Eagerly refresh the token so we fail fast with a clear message
+    # instead of crashing deep inside the first API call.
+    try:
+        from google.auth.transport.requests import Request as AuthRequest
+
+        creds.refresh(AuthRequest())
+    except RefreshError:
+        print(
+            "[error] Google OAuth token is expired or revoked. "
+            "Please regenerate your refresh token and update the "
+            "GOOGLE_OAUTH_TOKEN secret."
+        )
+        raise
     slides = build("slides", "v1", credentials=creds)
     drive = build("drive", "v3", credentials=creds)
     return slides, drive

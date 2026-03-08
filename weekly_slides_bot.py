@@ -342,13 +342,17 @@ def get_google_services():
         creds = ServiceAccountCredentials.from_service_account_info(
             token_data, scopes=GOOGLE_SCOPES
         )
-    elif cred_type == "authorized_user" or (
-        not cred_type and "refresh_token" in token_data
-    ):
-        if cred_type == "authorized_user":
-            print("[info] Using authorized-user (OAuth2) credentials.")
-        else:
-            print("[info] Using OAuth2 user credentials (legacy format).")
+    elif cred_type == "authorized_user":
+        print("[info] Using authorized-user (OAuth2) credentials.")
+        creds = Credentials(
+            token=None,
+            refresh_token=token_data["refresh_token"],
+            client_id=token_data["client_id"],
+            client_secret=token_data["client_secret"],
+            token_uri=token_data.get("token_uri", "https://oauth2.googleapis.com/token"),
+        )
+    elif not cred_type and "refresh_token" in token_data:
+        print("[info] Using OAuth2 user credentials (legacy format).")
         creds = Credentials(
             token=None,
             refresh_token=token_data["refresh_token"],

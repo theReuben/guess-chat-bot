@@ -164,7 +164,7 @@ class TestGetGoogleServicesUnrecognisedFormat:
             with pytest.raises(ValueError, match="Unrecognised credential file format"):
                 get_google_services()
 
-    def test_oauth_client_config_hint_mentions_installed(self, capsys):
+    def test_oauth_client_config_hint_mentions_installed(self):
         bad_data = json.dumps({"installed": {"client_id": "x"}})
         with patch("builtins.open", mock_open(read_data=bad_data)):
             with pytest.raises(ValueError) as exc_info:

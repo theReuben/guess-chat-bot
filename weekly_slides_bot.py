@@ -39,6 +39,8 @@ DISCORD_CHANNEL_ID = int(os.environ["DISCORD_CHANNEL_ID"])
 DISCORD_RESULTS_CHANNEL_ID = int(os.environ["DISCORD_RESULTS_CHANNEL_ID"])
 _MOD_CHANNEL_RAW = os.environ.get("DISCORD_MOD_CHANNEL_ID")
 DISCORD_MOD_CHANNEL_ID: int | None = int(_MOD_CHANNEL_RAW) if _MOD_CHANNEL_RAW else None
+_TEST_CHANNEL_RAW = os.environ.get("DISCORD_TEST_CHANNEL_ID")
+DISCORD_TEST_CHANNEL_ID: int | None = int(_TEST_CHANNEL_RAW) if _TEST_CHANNEL_RAW else None
 MOD_ROLE_NAME = os.environ.get("MOD_ROLE_NAME", "Mod")
 BOT_MODE = os.environ.get("BOT_MODE", "slides")
 GOOGLE_CREDS_FILE = os.environ.get("GOOGLE_CREDS_FILE", "service_account.json")
@@ -1213,21 +1215,25 @@ async def generate_slides(client: discord.Client) -> None:
             )
 
     if not all_submissions:
-        # In preview mode, re-post the existing deck links from state so
-        # that mods can always verify the preview pipeline is working.
-        if BOT_MODE == "preview" and state.get("named_pres_id"):
-            print("[info] No SUBMISSION messages found — preview mode will re-post existing deck links.")
+        # In preview/test_slides mode, re-post the existing deck links from state so
+        # that the pipeline can always be verified.
+        if BOT_MODE in ("preview", "test_slides") and state.get("named_pres_id"):
+            print("[info] No SUBMISSION messages found — re-posting existing deck links.")
             named_pres_id = state["named_pres_id"]
             anon_pres_id = state["anon_pres_id"]
             post_topic = state.get("topic", topic)
-            if DISCORD_MOD_CHANNEL_ID is not None:
-                post_channel = client.get_channel(DISCORD_MOD_CHANNEL_ID)
+            if BOT_MODE == "test_slides":
+                repost_channel_id = DISCORD_TEST_CHANNEL_ID
+            else:
+                repost_channel_id = DISCORD_MOD_CHANNEL_ID
+            if repost_channel_id is not None:
+                post_channel = client.get_channel(repost_channel_id)
                 if post_channel is not None:
                     named_url = presentation_url(named_pres_id)
                     anon_url = presentation_url(anon_pres_id)
                     msg_text = format_results_message(post_topic, [], named_url, anon_url)
                     await post_channel.send(msg_text)
-                    print("[info] Posted preview results to mod channel.")
+                    print("[info] Posted results to channel.")
             return
         print("[info] No SUBMISSION messages found after the marker.")
         return
@@ -1258,10 +1264,10 @@ async def generate_slides(client: discord.Client) -> None:
     new_submissions = [s for s in all_submissions if s["id"] not in processed_ids]
 
     if not new_submissions:
-        if BOT_MODE != "preview":
+        if BOT_MODE not in ("preview", "test_slides"):
             print("[info] No new submissions since last run; nothing to do.")
             return
-        print("[info] No new submissions — preview mode will still post current results.")
+        print("[info] No new submissions — will still post current results.")
 
     errors: list[dict] = []  # populated below only when slides are built/appended
 
@@ -1283,9 +1289,17 @@ async def generate_slides(client: discord.Client) -> None:
 
     # Post results
     # In preview mode the message goes to the mod channel for a sanity check
-    # before the public Friday post; in normal slides mode it goes to the
-    # public results channel.
-    if BOT_MODE == "preview":
+    # before the public Friday post; in test_slides mode it goes to the test
+    # channel; in normal slides mode it goes to the public results channel.
+    if BOT_MODE == "test_slides":
+        if DISCORD_TEST_CHANNEL_ID is None:
+            print("[error] test_slides mode requires DISCORD_TEST_CHANNEL_ID to be set; skipping post.")
+            post_channel = None
+        else:
+            post_channel = client.get_channel(DISCORD_TEST_CHANNEL_ID)
+            if post_channel is None:
+                print(f"[error] Could not find test channel {DISCORD_TEST_CHANNEL_ID}")
+    elif BOT_MODE == "preview":
         if DISCORD_MOD_CHANNEL_ID is None:
             print("[error] Preview mode requires DISCORD_MOD_CHANNEL_ID to be set; skipping post.")
             post_channel = None
@@ -1306,8 +1320,11 @@ async def generate_slides(client: discord.Client) -> None:
         print("[info] Posted results message.")
 
         # Send error notifications for processing issues
+        # In test_slides mode all notifications go to the test channel.
         error_channel = None
-        if DISCORD_MOD_CHANNEL_ID is not None:
+        if BOT_MODE == "test_slides":
+            error_channel = post_channel
+        elif DISCORD_MOD_CHANNEL_ID is not None:
             error_channel = client.get_channel(DISCORD_MOD_CHANNEL_ID)
             if error_channel is None:
                 print(f"[warn] Could not find mod channel {DISCORD_MOD_CHANNEL_ID}; falling back to post channel")
@@ -1331,6 +1348,10 @@ async def generate_slides(client: discord.Client) -> None:
             print(f"[info] Sent {len(errors)} error notification(s).")
 
     # Persist state (preserve keys written by other modes, e.g. last_announced_topic)
+    # In test_slides mode, skip persistence so test runs don't affect production state.
+    if BOT_MODE == "test_slides":
+        print("[info] test_slides mode — skipping state persistence.")
+        return
     prev_state = load_state()
     prev_state.update({
         "marker_id": marker_id,
@@ -1374,48 +1395,74 @@ async def check_mod_and_announce(client: discord.Client) -> None:
     state = load_state()
     if topic == state.get("last_announced_topic"):
         print("[info] Topic unchanged; already announced.")
-        # Send a reminder to the mod channel asking if there's a new topic.
-        if DISCORD_MOD_CHANNEL_ID is not None:
-            mod_channel = client.get_channel(DISCORD_MOD_CHANNEL_ID)
-            if mod_channel is not None:
+        # Send a reminder asking if there's a new topic.
+        # In test_announce mode the reminder goes to the test channel.
+        if BOT_MODE == "test_announce":
+            reminder_channel_id = DISCORD_TEST_CHANNEL_ID
+        else:
+            reminder_channel_id = DISCORD_MOD_CHANNEL_ID
+        if reminder_channel_id is not None:
+            reminder_channel = client.get_channel(reminder_channel_id)
+            if reminder_channel is not None:
                 guild = getattr(submissions_channel, "guild", None)
                 mod_mention = _resolve_mod_mention(guild)
-                await mod_channel.send(
+                await reminder_channel.send(
                     f"{mod_mention} we haven't announced a new guess chat yet, is there a new one this week?"
                 )
-                print("[info] Sent reminder to mod channel about missing new topic.")
+                print("[info] Sent reminder about missing new topic.")
             else:
-                print(f"[warn] Could not find mod channel {DISCORD_MOD_CHANNEL_ID}")
+                print(f"[warn] Could not find channel {reminder_channel_id}")
         return
 
     # --- Post the GUESS CHAT announcement ---
+    # In test_announce mode the announcement goes to the test channel so it
+    # doesn't pollute the real submissions channel.
+    if BOT_MODE == "test_announce":
+        if DISCORD_TEST_CHANNEL_ID is None:
+            print("[error] test_announce mode requires DISCORD_TEST_CHANNEL_ID to be set; skipping.")
+            return
+        announce_channel = client.get_channel(DISCORD_TEST_CHANNEL_ID)
+        if announce_channel is None:
+            print(f"[error] Could not find test channel {DISCORD_TEST_CHANNEL_ID}")
+            return
+    else:
+        announce_channel = submissions_channel
     posted_msg = await submissions_channel.send(build_announcement_message(topic))
     print(f"[info] Posted GUESS CHAT announcement for topic '{topic}'.")
 
-    # --- Send confirmation to mod channel ---
-    if DISCORD_MOD_CHANNEL_ID is not None:
-        mod_channel = client.get_channel(DISCORD_MOD_CHANNEL_ID)
-        if mod_channel is not None:
+    # --- Send confirmation ---
+    # In test_announce mode the confirmation also goes to the test channel.
+    if BOT_MODE == "test_announce":
+        confirm_channel_id = DISCORD_TEST_CHANNEL_ID
+    else:
+        confirm_channel_id = DISCORD_MOD_CHANNEL_ID
+    if confirm_channel_id is not None:
+        confirm_channel = client.get_channel(confirm_channel_id)
+        if confirm_channel is not None:
             guild = getattr(submissions_channel, "guild", None)
             mod_mention = _resolve_mod_mention(guild)
             guild_id = guild.id if guild is not None else None
             if guild_id is not None:
                 msg_url = discord_message_url(guild_id, DISCORD_CHANNEL_ID, str(posted_msg.id))
-                await mod_channel.send(
+                await confirm_channel.send(
                     f"{mod_mention} New Guess Chat theme: **{topic}**\n"
                     f"Are there any extras we should add?\n"
                     f"{msg_url}"
                 )
             else:
-                await mod_channel.send(
+                await confirm_channel.send(
                     f"{mod_mention} New Guess Chat theme: **{topic}**\n"
                     f"Are there any extras we should add?"
                 )
-            print("[info] Sent confirmation to mod channel.")
+            print("[info] Sent confirmation.")
         else:
-            print(f"[warn] Could not find mod channel {DISCORD_MOD_CHANNEL_ID}")
+            print(f"[warn] Could not find channel {confirm_channel_id}")
 
-    # Persist the announced topic to avoid re-announcing
+    # Persist the announced topic to avoid re-announcing.
+    # In test_announce mode, skip persistence so test runs don't affect production state.
+    if BOT_MODE == "test_announce":
+        print("[info] test_announce mode — skipping state persistence.")
+        return
     state["last_announced_topic"] = topic
     await asyncio.to_thread(save_state, state)
     print("[info] State saved (announcement tracked).")
@@ -1430,9 +1477,9 @@ class OneShotClient(discord.Client):
     async def on_ready(self) -> None:
         print(f"[info] Logged in as {self.user}")
         try:
-            if BOT_MODE == "announce":
+            if BOT_MODE in ("announce", "test_announce"):
                 await check_mod_and_announce(self)
-            elif BOT_MODE in ("slides", "preview"):
+            elif BOT_MODE in ("slides", "preview", "test_slides"):
                 await generate_slides(self)
             else:
                 print(f"[warn] Unknown BOT_MODE '{BOT_MODE}'; proceeding with generate_slides.")

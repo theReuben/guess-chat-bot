@@ -1422,11 +1422,13 @@ async def check_mod_and_announce(client: discord.Client) -> None:
             print("[error] test_announce mode requires DISCORD_TEST_CHANNEL_ID to be set; skipping.")
             return
         announce_channel = client.get_channel(DISCORD_TEST_CHANNEL_ID)
+        announce_channel_id = DISCORD_TEST_CHANNEL_ID
         if announce_channel is None:
             print(f"[error] Could not find test channel {DISCORD_TEST_CHANNEL_ID}")
             return
     else:
         announce_channel = submissions_channel
+        announce_channel_id = DISCORD_CHANNEL_ID
     posted_msg = await announce_channel.send(build_announcement_message(topic))
     print(f"[info] Posted GUESS CHAT announcement for topic '{topic}'.")
 
@@ -1443,7 +1445,7 @@ async def check_mod_and_announce(client: discord.Client) -> None:
             mod_mention = _resolve_mod_mention(guild)
             guild_id = guild.id if guild is not None else None
             if guild_id is not None:
-                msg_url = discord_message_url(guild_id, DISCORD_CHANNEL_ID, str(posted_msg.id))
+                msg_url = discord_message_url(guild_id, announce_channel_id, str(posted_msg.id))
                 await confirm_channel.send(
                     f"{mod_mention} New Guess Chat theme: **{topic}**\n"
                     f"Are there any extras we should add?\n"

@@ -269,6 +269,53 @@ class TestTestAnnounceRouting:
     @patch("weekly_slides_bot.DISCORD_TEST_CHANNEL_ID", 4)
     @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)
     @patch("weekly_slides_bot.save_state")
+    @patch("weekly_slides_bot.load_state", return_value={})
+    async def test_confirmation_url_references_test_channel(self, _load, mock_save):
+        """In test_announce mode the confirmation URL points to the test channel."""
+        from weekly_slides_bot import check_mod_and_announce
+
+        mock_submissions = MagicMock()
+        mock_submissions.topic = "Current Guess Chat: Fave Movie"
+        mock_submissions.guild = MagicMock()
+        mock_submissions.guild.id = 12345
+        mock_submissions.guild.roles = []
+        mock_submissions.send = AsyncMock()
+
+        mock_test_channel = MagicMock()
+        mock_test_channel.send = AsyncMock()
+        # The announcement send returns a message with an id
+        mock_test_channel.send.return_value = MagicMock(id=9001)
+
+        mock_mod_channel = MagicMock()
+        mock_mod_channel.send = AsyncMock()
+
+        def get_channel(cid):
+            if cid == 1:
+                return mock_submissions
+            if cid == 3:
+                return mock_mod_channel
+            if cid == 4:
+                return mock_test_channel
+            return None
+
+        mock_client = MagicMock()
+        mock_client.get_channel.side_effect = get_channel
+
+        await check_mod_and_announce(mock_client)
+
+        # The confirmation message (second send) should contain a URL
+        # referencing the test channel (4), not the submissions channel (1).
+        calls = mock_test_channel.send.call_args_list
+        assert len(calls) >= 2  # announcement + confirmation
+        confirm_text = calls[1].args[0]
+        assert "/4/" in confirm_text, f"Expected test channel ID in URL, got: {confirm_text}"
+        assert "/1/" not in confirm_text, f"Submissions channel ID should not appear in URL: {confirm_text}"
+
+    @pytest.mark.asyncio
+    @patch("weekly_slides_bot.BOT_MODE", "test_announce")
+    @patch("weekly_slides_bot.DISCORD_TEST_CHANNEL_ID", 4)
+    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)
+    @patch("weekly_slides_bot.save_state")
     @patch("weekly_slides_bot.load_state", return_value={"last_announced_topic": "Fave Movie"})
     async def test_reminder_posted_to_test_channel(self, _load, mock_save):
         """In test_announce mode the reminder goes to the test channel when topic is unchanged."""

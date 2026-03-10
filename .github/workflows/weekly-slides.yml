@@ -92,6 +92,14 @@ jobs:
           if git show-ref --verify --quiet refs/remotes/origin/state; then
             git show origin/state:state.json > state.json 2>/dev/null || true
             echo "Loaded state.json from state branch."
+            # Prefer refreshed OAuth credentials from the state branch over
+            # the static secret.  The bot persists updated tokens after each
+            # successful refresh, which prevents 7-day expiration for
+            # "Testing"-mode OAuth apps.
+            if git show origin/state:google_credentials.json > /dev/null 2>&1; then
+              git show origin/state:google_credentials.json > service_account.json
+              echo "Loaded refreshed Google credentials from state branch."
+            fi
           else
             echo "No state branch found; starting fresh."
           fi
@@ -122,8 +130,8 @@ jobs:
       - name: Save state to state branch
         if: env.SKIP != 'true'
         run: |
-          if [ ! -f state.json ]; then
-            echo "No state.json produced; nothing to save."
+          if [ ! -f state.json ] && [ ! -f service_account.json ]; then
+            echo "No state.json or credentials produced; nothing to save."
             exit 0
           fi
 
@@ -132,7 +140,10 @@ jobs:
 
           # Work in a temporary directory to avoid touching the main checkout
           TMPDIR=$(mktemp -d)
-          cp state.json "$TMPDIR/state.json"
+          [ -f state.json ] && cp state.json "$TMPDIR/state.json"
+          # Persist refreshed OAuth credentials so the next run can use them
+          # instead of the (potentially stale) static secret.
+          [ -f service_account.json ] && cp service_account.json "$TMPDIR/google_credentials.json"
 
           git fetch origin state 2>/dev/null || true
           if git show-ref --verify --quiet refs/remotes/origin/state; then
@@ -141,8 +152,9 @@ jobs:
             git worktree add --orphan -b state "$TMPDIR/state-branch"
           fi
 
-          cp "$TMPDIR/state.json" "$TMPDIR/state-branch/state.json"
+          [ -f "$TMPDIR/state.json" ] && cp "$TMPDIR/state.json" "$TMPDIR/state-branch/state.json"
+          [ -f "$TMPDIR/google_credentials.json" ] && cp "$TMPDIR/google_credentials.json" "$TMPDIR/state-branch/google_credentials.json"
           cd "$TMPDIR/state-branch"
-          git add state.json
+          git add state.json google_credentials.json 2>/dev/null || true
           git diff --cached --quiet || git commit -m "chore: update state [skip ci]"
           git push origin HEAD:state

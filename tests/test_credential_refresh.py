@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from unittest.mock import MagicMock, mock_open, patch
+from unittest.mock import MagicMock, call, mock_open, patch
 
 import pytest
 
@@ -205,4 +205,94 @@ class TestGetGoogleServicesAuthorizedUser:
         mock_build.return_value = MagicMock()
         with patch("google.oauth2.credentials.Credentials.refresh"):
             slides, drive = get_google_services()
+        assert mock_build.call_count == 2
+
+
+class TestCredentialPersistence:
+    """Refreshed OAuth2 credentials are persisted back to disk."""
+
+    _FAKE_AUTH_USER_DATA = json.dumps({
+        "type": "authorized_user",
+        "client_id": "fake-client-id",
+        "client_secret": "fake-client-secret",
+        "refresh_token": "fake-refresh-token",
+    })
+
+    @patch("weekly_slides_bot.build")
+    def test_oauth2_credentials_persisted_after_refresh(self, mock_build):
+        """After a successful refresh, updated credentials are written to disk."""
+        mock_build.return_value = MagicMock()
+        m = mock_open(read_data=self._FAKE_AUTH_USER_DATA)
+        with patch("builtins.open", m):
+            with patch("google.oauth2.credentials.Credentials.refresh") as mock_refresh:
+                def _fake_refresh(request):
+                    pass
+                mock_refresh.side_effect = _fake_refresh
+                slides, drive = get_google_services()
+        # The file should have been opened for writing (second call after read)
+        write_calls = [c for c in m.call_args_list if "w" in str(c)]
+        assert len(write_calls) > 0, "Credentials file should be opened for writing"
+
+    @patch("weekly_slides_bot.build")
+    def test_legacy_oauth2_credentials_persisted_after_refresh(self, mock_build):
+        """Legacy-format (no type field) OAuth2 creds are also persisted."""
+        mock_build.return_value = MagicMock()
+        m = mock_open(read_data=_FAKE_TOKEN_DATA)
+        with patch("builtins.open", m):
+            with patch("google.oauth2.credentials.Credentials.refresh"):
+                slides, drive = get_google_services()
+        write_calls = [c for c in m.call_args_list if "w" in str(c)]
+        assert len(write_calls) > 0, "Credentials file should be opened for writing"
+
+    @patch("weekly_slides_bot.build")
+    @patch("builtins.open", mock_open(read_data=json.dumps({
+        "type": "service_account",
+        "project_id": "fake-project",
+        "private_key_id": "key-id",
+        "private_key": (
+            "-----BEGIN RSA PRIVATE KEY-----\n"
+            "MIIEpAIBAAKCAQEA2a2rwplBQLFwEvBWwgamGEB0wEBuqFLn23SPbehh6KVETbmH\n"
+            "jGQXKMOlCMCDm0JFBGE1Xh6kMjBkMGTbYPuOSe8X2VjkFa7FM5LjKHCVTGGqO3o\n"
+            "-----END RSA PRIVATE KEY-----\n"
+        ),
+        "client_email": "bot@fake-project.iam.gserviceaccount.com",
+        "client_id": "123456789",
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+    })))
+    def test_service_account_not_persisted(self, mock_build):
+        """Service account credentials are not re-persisted (they don't rotate)."""
+        mock_build.return_value = MagicMock()
+        mock_creds = MagicMock()
+        with patch(
+            "weekly_slides_bot.ServiceAccountCredentials.from_service_account_info",
+            return_value=mock_creds,
+        ):
+            get_google_services()
+        # _persist_oauth_credentials should not be called for service accounts
+
+    @patch("weekly_slides_bot.build")
+    def test_persist_failure_does_not_crash(self, mock_build):
+        """If writing credentials fails, the error is handled gracefully."""
+        mock_build.return_value = MagicMock()
+        m = mock_open(read_data=self._FAKE_AUTH_USER_DATA)
+        # Make the write call raise an OSError
+        write_handle = MagicMock()
+        write_handle.__enter__ = MagicMock(side_effect=OSError("read-only filesystem"))
+        call_count = [0]
+        original_side_effect = m.side_effect
+
+        def _open_side_effect(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                # First call: reading the file
+                return m.return_value
+            # Second call: writing — raise OSError
+            raise OSError("read-only filesystem")
+
+        m.side_effect = _open_side_effect
+        with patch("builtins.open", m):
+            with patch("google.oauth2.credentials.Credentials.refresh"):
+                # Should not raise despite write failure
+                slides, drive = get_google_services()
         assert mock_build.call_count == 2

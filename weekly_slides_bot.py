@@ -332,30 +332,6 @@ def execute_with_retry(request, max_retries: int = 5) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def _persist_oauth_credentials(creds: Credentials, original_data: dict) -> None:
-    """Write refreshed OAuth2 credentials back to disk.
-
-    After a successful token refresh, Google may rotate the refresh token.
-    Persisting the updated credentials prevents the 7-day expiration that
-    affects OAuth apps in "Testing" mode.
-    """
-    updated = dict(original_data)
-    if creds.token:
-        updated["token"] = creds.token
-    if creds.refresh_token:
-        updated["refresh_token"] = creds.refresh_token
-    if creds.client_id:
-        updated["client_id"] = creds.client_id
-    if creds.client_secret:
-        updated["client_secret"] = creds.client_secret
-    try:
-        with open(GOOGLE_CREDS_FILE, "w") as f:
-            json.dump(updated, f, indent=2)
-        print("[info] Refreshed OAuth credentials persisted to disk.")
-    except OSError as exc:
-        print(f"[warn] Could not persist refreshed credentials: {exc}")
-
-
 def get_google_services():
     with open(GOOGLE_CREDS_FILE) as f:
         token_data = json.load(f)
@@ -425,13 +401,6 @@ def get_google_services():
                 "the GOOGLE_OAUTH_TOKEN secret."
             )
         raise
-
-    # Persist refreshed OAuth2 credentials back to disk so that any
-    # rotated refresh token is available on the next run.  This is
-    # critical for "Testing"-mode OAuth apps whose refresh tokens
-    # expire after 7 days of inactivity.
-    if cred_type in ("authorized_user", None) and hasattr(creds, "refresh_token"):
-        _persist_oauth_credentials(creds, token_data)
     slides = build("slides", "v1", credentials=creds)
     drive = build("drive", "v3", credentials=creds)
     return slides, drive

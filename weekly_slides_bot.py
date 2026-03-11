@@ -420,9 +420,14 @@ def get_google_services():
         else:
             print(
                 "[error] Google OAuth token is expired or revoked. "
-                "Please regenerate your refresh token and update the "
-                "credentials file (GOOGLE_CREDS_FILE) or, in CI, "
-                "the GOOGLE_OAUTH_TOKEN secret."
+                "OAuth apps in 'Testing' mode have a hard 7-day expiry "
+                "from the time of consent (using the token does NOT reset "
+                "this).  To fix: (1) switch the OAuth app to 'In Production' "
+                "in the Google Cloud Console OAuth consent screen, (2) re-run "
+                "the OAuth flow to get a fresh refresh token, and (3) update "
+                "the credentials file (GOOGLE_CREDS_FILE) or, in CI, the "
+                "GOOGLE_OAUTH_TOKEN secret.  Alternatively, switch to a "
+                "service account which has no token expiry."
             )
         raise
 

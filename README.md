@@ -96,7 +96,11 @@ Service account credentials do not expire, avoiding the `RefreshError: Token has
 5. Generate a refresh token by running an OAuth flow (e.g. using `google-auth-oauthlib`'s `InstalledAppFlow`) with the scopes `https://www.googleapis.com/auth/presentations` and `https://www.googleapis.com/auth/drive`. Save the resulting token JSON (containing `client_id`, `client_secret`, `refresh_token`, and `token_uri`) as `oauth_token.json`.
 6. Create a folder in Google Drive to store the generated decks. Note the folder ID from the URL (`DRIVE_FOLDER_ID`).
 
-> **Note:** OAuth2 refresh tokens for apps in "Testing" mode expire after 7 days. If you see `RefreshError: Token has been expired or revoked`, either re-run the OAuth flow or switch to a service account.
+> **Note:** OAuth2 refresh tokens for apps in "Testing" mode have a **hard 7-day expiry from the time of consent** (using the token does *not* reset this timer). If you see `RefreshError: Token has been expired or revoked`, you have three options:
+>
+> 1. **Recommended:** Switch the OAuth app to **"In Production"** in the Google Cloud Console → OAuth consent screen. Then re-run the OAuth flow to get a new refresh token (tokens issued in Testing mode still carry the 7-day limit). Production mode tokens last 6 months of inactivity.
+> 2. **Alternative:** Switch to a **service account** (Option A above), which has no token expiry.
+> 3. **Workaround:** Re-run the OAuth flow every 7 days to get a fresh token — not practical for automated use.
 
 ### Gemini API Key *(optional — for fun facts generation)*
 

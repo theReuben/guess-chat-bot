@@ -18,13 +18,8 @@ concurrency:
 jobs:
   refresh-token:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
@@ -35,16 +30,6 @@ jobs:
 
       - name: Write Google credentials
         run: echo '${{ secrets.GOOGLE_OAUTH_TOKEN }}' > service_account.json
-
-      - name: Load refreshed credentials from state branch
-        run: |
-          git fetch origin state 2>/dev/null || true
-          if git show-ref --verify --quiet refs/remotes/origin/state; then
-            if git show origin/state:google_credentials.json > /dev/null 2>&1; then
-              git show origin/state:google_credentials.json > service_account.json
-              echo "Loaded refreshed credentials from state branch."
-            fi
-          fi
 
       - name: Refresh token
         run: |
@@ -75,35 +60,5 @@ jobs:
           )
 
           creds.refresh(AuthRequest())
-          print("Token refreshed successfully.")
-
-          # Persist the updated credentials
-          if creds.refresh_token:
-              data["refresh_token"] = creds.refresh_token
-          if creds.token:
-              data["token"] = creds.token
-          with open("service_account.json", "w") as f:
-              json.dump(data, f, indent=2)
-          print("Updated credentials written to disk.")
+          print("Token refreshed successfully — 7-day inactivity timer reset.")
           PYEOF
-
-      - name: Save refreshed credentials to state branch
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          TMPDIR=$(mktemp -d)
-          cp service_account.json "$TMPDIR/google_credentials.json"
-
-          git fetch origin state 2>/dev/null || true
-          if git show-ref --verify --quiet refs/remotes/origin/state; then
-            git worktree add "$TMPDIR/state-branch" origin/state
-          else
-            git worktree add --orphan -b state "$TMPDIR/state-branch"
-          fi
-
-          cp "$TMPDIR/google_credentials.json" "$TMPDIR/state-branch/google_credentials.json"
-          cd "$TMPDIR/state-branch"
-          git add google_credentials.json
-          git diff --cached --quiet || git commit -m "chore: refresh Google OAuth token [skip ci]"
-          git push origin HEAD:state

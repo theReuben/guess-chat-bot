@@ -56,6 +56,7 @@ class TestBlockingCallsOffloaded:
         mock_to_thread.side_effect = [
             (mock_slides_svc, mock_drive_svc),  # get_google_services
             None,         # delete_old_images
+            None,         # empty_trash
             "named_id",   # copy_presentation (named)
             "anon_id",    # copy_presentation (anon)
             None,         # share_presentation (named)
@@ -84,11 +85,12 @@ class TestBlockingCallsOffloaded:
         await generate_slides(mock_client)
 
         # Verify to_thread was called for each blocking operation
-        assert mock_to_thread.await_count == 10
+        assert mock_to_thread.await_count == 11
         called_funcs = [c.args[0].__name__ for c in mock_to_thread.call_args_list]
         assert called_funcs == [
             "get_google_services",
             "delete_old_images",
+            "empty_trash",
             "copy_presentation",
             "copy_presentation",
             "share_presentation",

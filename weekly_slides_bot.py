@@ -446,11 +446,14 @@ def delete_drive_file(drive_svc, file_id: str) -> None:
 
 
 def delete_old_images(drive_svc) -> None:
-    """Delete all 'submission_image' files from the Drive folder."""
+    """Delete all 'submission_image' files owned by us from the Drive folder."""
     if not DRIVE_FOLDER_ID:
         return
     try:
-        query = f"name = 'submission_image' and '{DRIVE_FOLDER_ID}' in parents and trashed = false"
+        query = (
+            f"name = 'submission_image' and '{DRIVE_FOLDER_ID}' in parents "
+            f"and trashed = false and 'me' in owners"
+        )
         resp = execute_with_retry(
             drive_svc.files().list(q=query, fields="files(id)", pageSize=1000)
         )
@@ -462,6 +465,15 @@ def delete_old_images(drive_svc) -> None:
             delete_drive_file(drive_svc, f["id"])
     except Exception as exc:  # noqa: BLE001
         print(f"[warn] Could not clean up old images: {exc}")
+
+
+def empty_trash(drive_svc) -> None:
+    """Permanently delete all trashed files to free Drive quota."""
+    try:
+        execute_with_retry(drive_svc.files().emptyTrash())
+        print("[info] Emptied Drive trash.")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[warn] Could not empty Drive trash: {exc}")
 
 
 def presentation_url(pres_id: str) -> str:
@@ -1554,6 +1566,7 @@ async def generate_slides(client: discord.Client) -> None:
         if anon_pres_id:
             await asyncio.to_thread(delete_drive_file, drive_svc, anon_pres_id)
         await asyncio.to_thread(delete_old_images, drive_svc)
+        await asyncio.to_thread(empty_trash, drive_svc)
         try:
             named_pres_id = await asyncio.to_thread(copy_presentation, drive_svc, f"Guess Chat — {topic} (Named)")
             anon_pres_id = await asyncio.to_thread(copy_presentation, drive_svc, f"Guess Chat — {topic} (Anonymous)")

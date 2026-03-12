@@ -445,6 +445,25 @@ def delete_drive_file(drive_svc, file_id: str) -> None:
         print(f"[warn] Could not delete file {file_id}: {exc}")
 
 
+def delete_old_images(drive_svc) -> None:
+    """Delete all 'submission_image' files from the Drive folder."""
+    if not DRIVE_FOLDER_ID:
+        return
+    try:
+        query = f"name = 'submission_image' and '{DRIVE_FOLDER_ID}' in parents and trashed = false"
+        resp = execute_with_retry(
+            drive_svc.files().list(q=query, fields="files(id)", pageSize=1000)
+        )
+        files = resp.get("files", [])
+        if not files:
+            return
+        print(f"[info] Deleting {len(files)} old submission image(s) from Drive.")
+        for f in files:
+            delete_drive_file(drive_svc, f["id"])
+    except Exception as exc:  # noqa: BLE001
+        print(f"[warn] Could not clean up old images: {exc}")
+
+
 def presentation_url(pres_id: str) -> str:
     return f"https://docs.google.com/presentation/d/{pres_id}/edit?usp=sharing"
 
@@ -1529,11 +1548,12 @@ async def generate_slides(client: discord.Client) -> None:
 
     if new_round:
         print(f"[info] New round detected (marker {marker_id}); creating fresh decks.")
-        # Delete previous round's decks to free Drive quota
+        # Delete previous round's decks and images to free Drive quota
         if named_pres_id:
             await asyncio.to_thread(delete_drive_file, drive_svc, named_pres_id)
         if anon_pres_id:
             await asyncio.to_thread(delete_drive_file, drive_svc, anon_pres_id)
+        await asyncio.to_thread(delete_old_images, drive_svc)
         try:
             named_pres_id = await asyncio.to_thread(copy_presentation, drive_svc, f"Guess Chat — {topic} (Named)")
             anon_pres_id = await asyncio.to_thread(copy_presentation, drive_svc, f"Guess Chat — {topic} (Anonymous)")

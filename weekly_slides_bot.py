@@ -299,6 +299,10 @@ def _self_assign_issue(api_url: str, headers: dict[str, str], issue_number: int)
 _RETRYABLE_STATUS_CODES = (429, 500, 502, 503)
 
 
+class StorageQuotaExceededError(Exception):
+    """Raised when the Google Drive storage quota has been exceeded."""
+
+
 def execute_with_retry(request, max_retries: int = 5) -> Any:
     """Execute a Google API request with exponential backoff on transient errors."""
     for attempt in range(max_retries + 1):
@@ -313,6 +317,12 @@ def execute_with_retry(request, max_retries: int = 5) -> Any:
             raise
         except HttpError as exc:
             status = exc.resp.status
+            exc_text = str(exc) + getattr(exc, "content", b"").decode("utf-8", errors="replace")
+            if status == 403 and "storageQuotaExceeded" in exc_text:
+                raise StorageQuotaExceededError(
+                    "Google Drive storage quota exceeded. "
+                    "Free up space in Google Drive or upgrade storage, then re-run the bot."
+                ) from exc
             retryable = status in _RETRYABLE_STATUS_CODES or (
                 status == 403 and "rateLimitExceeded" in str(exc)
             )
@@ -485,9 +495,13 @@ def upload_image_to_drive(drive_svc, url: str, cache: dict[str, str]) -> str | N
     meta: dict[str, Any] = {"name": "submission_image"}
     if DRIVE_FOLDER_ID:
         meta["parents"] = [DRIVE_FOLDER_ID]
-    file_obj = execute_with_retry(
-        drive_svc.files().create(body=meta, media_body=media, fields="id")
-    )
+    try:
+        file_obj = execute_with_retry(
+            drive_svc.files().create(body=meta, media_body=media, fields="id")
+        )
+    except StorageQuotaExceededError:
+        print("[warn] Google Drive storage quota exceeded — skipping image upload.")
+        return None
     file_id = file_obj["id"]
 
     # Make the file publicly readable so Slides API can fetch it
@@ -1515,8 +1529,22 @@ async def generate_slides(client: discord.Client) -> None:
 
     if new_round:
         print(f"[info] New round detected (marker {marker_id}); creating fresh decks.")
-        named_pres_id = await asyncio.to_thread(copy_presentation, drive_svc, f"Guess Chat — {topic} (Named)")
-        anon_pres_id = await asyncio.to_thread(copy_presentation, drive_svc, f"Guess Chat — {topic} (Anonymous)")
+        try:
+            named_pres_id = await asyncio.to_thread(copy_presentation, drive_svc, f"Guess Chat — {topic} (Named)")
+            anon_pres_id = await asyncio.to_thread(copy_presentation, drive_svc, f"Guess Chat — {topic} (Anonymous)")
+        except StorageQuotaExceededError:
+            print("[error] Google Drive storage quota exceeded — cannot create new decks.")
+            notify_channel = None
+            if BOT_MODE == "test_slides" and DISCORD_TEST_CHANNEL_ID is not None:
+                notify_channel = client.get_channel(DISCORD_TEST_CHANNEL_ID)
+            elif DISCORD_MOD_CHANNEL_ID is not None:
+                notify_channel = client.get_channel(DISCORD_MOD_CHANNEL_ID)
+            if notify_channel is not None:
+                await notify_channel.send(
+                    "❌ **Google Drive storage quota exceeded** — the bot cannot create "
+                    "new slide decks until space is freed up or the storage plan is upgraded."
+                )
+            return
         await asyncio.to_thread(share_presentation, drive_svc, named_pres_id)
         await asyncio.to_thread(share_presentation, drive_svc, anon_pres_id)
         processed_ids = set()

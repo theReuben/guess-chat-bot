@@ -16,7 +16,7 @@ os.environ.setdefault("TEMPLATE_DECK_ID", "tpl")
 from google.auth.exceptions import RefreshError
 from googleapiclient.errors import HttpError
 
-from weekly_slides_bot import execute_with_retry
+from weekly_slides_bot import StorageQuotaExceededError, execute_with_retry
 
 
 def _make_http_error(status: int, body: str = "") -> HttpError:
@@ -123,6 +123,29 @@ class TestExecuteWithRetryBackoff:
         assert 1.0 <= waits[0] < 2.0  # 2^0 + jitter
         assert 2.0 <= waits[1] < 3.0  # 2^1 + jitter
         assert 4.0 <= waits[2] < 5.0  # 2^2 + jitter
+
+
+class TestExecuteWithRetryStorageQuota:
+    """storageQuotaExceeded is raised as StorageQuotaExceededError (not retried)."""
+
+    def test_raises_storage_quota_exceeded_error(self):
+        request = MagicMock()
+        request.execute.side_effect = _make_http_error(
+            403, "storageQuotaExceeded"
+        )
+        with pytest.raises(StorageQuotaExceededError, match="storage quota exceeded"):
+            execute_with_retry(request)
+        request.execute.assert_called_once()
+
+    def test_not_retried(self):
+        request = MagicMock()
+        request.execute.side_effect = _make_http_error(
+            403,
+            '{"error": {"errors": [{"reason": "storageQuotaExceeded"}]}}',
+        )
+        with pytest.raises(StorageQuotaExceededError):
+            execute_with_retry(request, max_retries=3)
+        request.execute.assert_called_once()
 
 
 class TestExecuteWithRetryRefreshError:

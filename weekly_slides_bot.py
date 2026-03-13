@@ -425,6 +425,29 @@ def copy_presentation(drive_svc, title: str) -> str:
     return result["id"]
 
 
+def copy_presentation_with_quota_retry(
+    drive_svc, title: str, max_retries: int = 4
+) -> str:
+    """Copy the template deck, retrying with backoff on quota errors.
+
+    Google Drive quota may not update immediately after emptying trash.
+    Retrying with exponential backoff gives the quota time to propagate.
+    """
+    for attempt in range(max_retries + 1):
+        try:
+            return copy_presentation(drive_svc, title)
+        except StorageQuotaExceededError:
+            if attempt == max_retries:
+                raise
+            wait = 2 ** (attempt + 1)  # 2, 4, 8, 16 seconds
+            print(
+                f"[warn] Storage quota exceeded after trash empty; "
+                f"retrying in {wait}s (attempt {attempt + 1}/{max_retries})"
+            )
+            time.sleep(wait)
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
 def share_presentation(drive_svc, file_id: str) -> None:
     """Share presentation as anyone-with-link editor."""
     execute_with_retry(
@@ -1568,8 +1591,8 @@ async def generate_slides(client: discord.Client) -> None:
         await asyncio.to_thread(delete_old_images, drive_svc)
         await asyncio.to_thread(empty_trash, drive_svc)
         try:
-            named_pres_id = await asyncio.to_thread(copy_presentation, drive_svc, f"Guess Chat — {topic} (Named)")
-            anon_pres_id = await asyncio.to_thread(copy_presentation, drive_svc, f"Guess Chat — {topic} (Anonymous)")
+            named_pres_id = await asyncio.to_thread(copy_presentation_with_quota_retry, drive_svc, f"Guess Chat — {topic} (Named)")
+            anon_pres_id = await asyncio.to_thread(copy_presentation_with_quota_retry, drive_svc, f"Guess Chat — {topic} (Anonymous)")
         except StorageQuotaExceededError:
             print("[error] Google Drive storage quota exceeded — cannot create new decks.")
             notify_channel = None

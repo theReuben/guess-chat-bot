@@ -59,7 +59,7 @@ All configuration comes from environment variables (see `.env.example`):
 | `DISCORD_CHANNEL_ID` | Yes | Submissions channel ID (int) |
 | `DISCORD_RESULTS_CHANNEL_ID` | Yes | Results channel ID (int) |
 | `TEMPLATE_DECK_ID` | Yes | Google Slides template presentation ID |
-| `GOOGLE_CREDS_FILE` | No | Path to OAuth token JSON (default: `service_account.json`) |
+| `GOOGLE_CREDS_FILE` | No | Path to OAuth token JSON (default: `oauth_token.json`) |
 | `DRIVE_FOLDER_ID` | No | Google Drive folder ID for generated decks |
 | `STATE_FILE` | No | Path to state JSON file (default: `state.json`) |
 

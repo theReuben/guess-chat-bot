@@ -6,6 +6,8 @@ on:
     - cron: '30 11 * * 5'  # 11:30 UTC (= 11:30 GMT, winter)
     - cron: '0 17 * * 5'   # 17:00 UTC (= 18:00 BST, summer) – announce mode
     - cron: '0 18 * * 5'   # 18:00 UTC (= 18:00 GMT, winter) – announce mode
+    - cron: '0 20 * * 1'   # 20:00 UTC (= 21:00 BST, summer) – Monday preview
+    - cron: '0 21 * * 1'   # 21:00 UTC (= 21:00 GMT, winter) – Monday preview
     - cron: '0 20 * * 4'   # 20:00 UTC (= 21:00 BST, summer) – Thursday preview
     - cron: '0 21 * * 4'   # 21:00 UTC (= 21:00 GMT, winter) – Thursday preview
   workflow_dispatch:
@@ -83,7 +85,7 @@ jobs:
 
       - name: Write Google credentials
         if: env.SKIP != 'true'
-        run: echo '${{ secrets.GOOGLE_OAUTH_TOKEN }}' > service_account.json
+        run: echo '${{ secrets.GOOGLE_OAUTH_TOKEN }}' > oauth_token.json
 
       - name: Load state from state branch
         if: env.SKIP != 'true'
@@ -113,7 +115,7 @@ jobs:
           BOT_MODE: ${{ env.BOT_MODE }}
           DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
           TEMPLATE_DECK_ID: ${{ secrets.TEMPLATE_DECK_ID }}
-          GOOGLE_CREDS_FILE: service_account.json
+          GOOGLE_CREDS_FILE: oauth_token.json
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}

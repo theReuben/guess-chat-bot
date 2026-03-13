@@ -58,7 +58,7 @@ When a mod updates the submissions channel description to `Current Guess Chat: <
 - **Python 3.10+**
 - A **Discord bot** with the Message Content intent enabled.
 - A **Google Cloud project** with the Slides API and Drive API enabled.
-- A **Google service account** (recommended) or an **OAuth2 Desktop App** client ID with a refresh token.
+- An **OAuth2 Desktop App** client ID with a refresh token (see setup below).
 
 ---
 
@@ -79,24 +79,14 @@ When a mod updates the submissions channel description to `Current Guess Chat: <
 1. Go to the [Google Cloud Console](https://console.cloud.google.com/) and create or select a project.
 2. Enable the **Google Slides API** and **Google Drive API**.
 
-#### Option A — Service Account (recommended)
-
-Service account credentials do not expire, avoiding the `RefreshError: Token has been expired or revoked` issue that can occur with OAuth2 user tokens.
-
-3. Go to **APIs & Services → Credentials**, click **Create Credentials → Service account**.
-4. Give the service account a name, then go to the **Keys** tab and click **Add Key → Create new key → JSON**.
-5. Download the JSON key file — this is your `GOOGLE_CREDS_FILE` (default name: `service_account.json`).
-6. Share the Google Drive folder (and the template deck) with the service account email address (found in the JSON as `client_email`).
-7. Create a folder in Google Drive to store the generated decks. Note the folder ID from the URL (`DRIVE_FOLDER_ID`).
-
-#### Option B — OAuth2 User Credentials
+#### OAuth2 User Credentials
 
 3. Go to **APIs & Services → OAuth consent screen**, configure it (External type), and add your Google account as a test user.
 4. Go to **APIs & Services → Credentials**, click **Create Credentials → OAuth client ID**, choose **Desktop app**, and download the JSON as `oauth_client.json`.
 5. Generate a refresh token by running an OAuth flow (e.g. using `google-auth-oauthlib`'s `InstalledAppFlow`) with the scopes `https://www.googleapis.com/auth/presentations` and `https://www.googleapis.com/auth/drive`. Save the resulting token JSON (containing `client_id`, `client_secret`, `refresh_token`, and `token_uri`) as `oauth_token.json`.
 6. Create a folder in Google Drive to store the generated decks. Note the folder ID from the URL (`DRIVE_FOLDER_ID`).
 
-> **Note:** OAuth2 refresh tokens for apps in "Testing" mode expire after 7 days. If you see `RefreshError: Token has been expired or revoked`, either re-run the OAuth flow or switch to a service account.
+> **Note:** OAuth2 refresh tokens for apps in "Testing" mode expire after 7 days. To prevent expiry the scheduled workflow includes a Monday preview run that refreshes the token automatically (Thursday → Monday = 4 days, Monday → Thursday = 3 days). If you still see `RefreshError: Token has been expired or revoked`, re-run the OAuth flow and update the `GOOGLE_OAUTH_TOKEN` secret.
 
 ### Gemini API Key *(optional — for fun facts generation)*
 
@@ -116,7 +106,7 @@ The bot can automatically generate fun facts about each round's submissions usin
    - **Slide 1 (Title)**: add a text box containing `{{TOPIC}}` — this will be replaced with the round topic. Optionally add a text box containing `{{FUNFACTS}}` — this will be filled with LLM-generated fun facts about the submissions (requires `GEMINI_API_KEY`; cleared if the feature is disabled).
    - **Slide 2 (Submission template)**: add text boxes containing `{{AUTHOR}}` and `{{BODY}}` — these are replaced for each submission; this slide is duplicated once per submission.
    - **Slide 3 (End)**: a static closing slide — no modifications.
-2. Share the presentation with your Google account (the one used for OAuth) as **Editor** (it likely already has access as the owner).
+2. The presentation should already be accessible under your Google account (the one used for OAuth).
 3. Copy the presentation ID from the URL (`TEMPLATE_DECK_ID`).
 
 ### GitHub Repository Setup
@@ -133,7 +123,7 @@ guess-chat-bot/
 ├── README.md
 ├── requirements.txt
 ├── weekly_slides_bot.py
-└── service_account.json    ← not committed (in .gitignore)
+└── oauth_token.json        ← not committed (in .gitignore)
 ```
 
 ### GitHub Secrets
@@ -166,14 +156,16 @@ The following environment variables are set automatically by the workflow or hav
 
 ### Automatic (Scheduled)
 
-The workflow runs every **Friday at 11:30 AM UK time** (slides mode) and again at **6:00 PM UK time** (announce mode). A **Thursday 9:00 PM UK time** preview run sends results to the mod channel. Two cron expressions per mode handle the clocks-change:
+The workflow runs every **Friday at 11:30 AM UK time** (slides mode) and again at **6:00 PM UK time** (announce mode). Preview runs on **Monday and Thursday at 9:00 PM UK time** send results to the mod channel — the Monday run also keeps the OAuth refresh token alive (tokens in "Testing" mode expire after 7 days). Two cron expressions per mode handle the clocks-change:
 
 - `30 10 * * 5` — 10:30 UTC = 11:30 BST (slides, summer)
 - `30 11 * * 5` — 11:30 UTC = 11:30 GMT (slides, winter)
 - `0 17 * * 5` — 17:00 UTC = 18:00 BST (announce, summer)
 - `0 18 * * 5` — 18:00 UTC = 18:00 GMT (announce, winter)
-- `0 20 * * 4` — 20:00 UTC = 21:00 BST (preview, summer)
-- `0 21 * * 4` — 21:00 UTC = 21:00 GMT (preview, winter)
+- `0 20 * * 1` — 20:00 UTC = 21:00 BST (Monday preview, summer)
+- `0 21 * * 1` — 21:00 UTC = 21:00 GMT (Monday preview, winter)
+- `0 20 * * 4` — 20:00 UTC = 21:00 BST (Thursday preview, summer)
+- `0 21 * * 4` — 21:00 UTC = 21:00 GMT (Thursday preview, winter)
 
 At the start of each run the workflow reads the current UK time and sets the appropriate mode, skipping the run for any other time to prevent double-runs during DST change weekends.
 
@@ -265,10 +257,12 @@ The UK observes **BST (UTC+1)** from late March to late October and **GMT (UTC+0
 - **Slides — Winter**: `30 11 * * 5` fires at 11:30 UTC = 11:30 GMT.
 - **Announce — Summer**: `0 17 * * 5` fires at 17:00 UTC = 18:00 BST.
 - **Announce — Winter**: `0 18 * * 5` fires at 18:00 UTC = 18:00 GMT.
-- **Preview — Summer**: `0 20 * * 4` fires at 20:00 UTC = 21:00 BST.
-- **Preview — Winter**: `0 21 * * 4` fires at 21:00 UTC = 21:00 GMT.
+- **Preview (Mon) — Summer**: `0 20 * * 1` fires at 20:00 UTC = 21:00 BST.
+- **Preview (Mon) — Winter**: `0 21 * * 1` fires at 21:00 UTC = 21:00 GMT.
+- **Preview (Thu) — Summer**: `0 20 * * 4` fires at 20:00 UTC = 21:00 BST.
+- **Preview (Thu) — Winter**: `0 21 * * 4` fires at 21:00 UTC = 21:00 GMT.
 
-On clocks-change Fridays (or Thursdays for preview), both crons for the same mode fire. The DST guard at the start of the job reads `TZ='Europe/London' date +%H` and `+%M` and applies the following logic:
+On clocks-change days, both crons for the same mode fire. The DST guard at the start of the job reads `TZ='Europe/London' date +%H` and `+%M` and applies the following logic:
 
 | Condition | Action |
 |---|---|
@@ -312,13 +306,13 @@ Tests use `unittest.mock` (`MagicMock`, `AsyncMock`, `patch`) to mock all Discor
 | Double-run on DST change | The DST guard handles this; check the workflow logs for "skipping this scheduled run" |
 | Bot skipped due to runner delay | The slides guard tolerates up to 30 min of GitHub Actions delay (accepts UK 12:00–12:29); if a run was still skipped, trigger it manually via **Actions → Run workflow** |
 | State branch missing | It is created automatically on the first successful run |
-| `RefreshError: Token has been expired or revoked` | Your Google OAuth token needs refreshing — re-run the OAuth consent flow and update the `GOOGLE_OAUTH_TOKEN` secret, or switch to a **service account** (recommended) which does not suffer from token expiry. When `GITHUB_TOKEN` and `GITHUB_REPOSITORY` are set, the bot automatically creates a GitHub issue for this error |
+| `RefreshError: Token has been expired or revoked` | Your Google OAuth token needs refreshing — re-run the OAuth consent flow and update the `GOOGLE_OAUTH_TOKEN` secret. The Monday and Thursday preview runs keep the token alive automatically; if it still expires, check that the scheduled workflow is running. When `GITHUB_TOKEN` and `GITHUB_REPOSITORY` are set, the bot automatically creates a GitHub issue for this error |
 
 ---
 
 ## Security Notes
 
-- `service_account.json`, `oauth_client.json`, `oauth_token.json`, and `.env` are excluded by `.gitignore` and must never be committed.
+- `oauth_client.json`, `oauth_token.json`, and `.env` are excluded by `.gitignore` and must never be committed.
 - Google access uses OAuth2 with your personal account, granting only the scopes authorised during the OAuth consent flow.
 - Generated presentations are shared as "anyone with the link can view" — they are not indexed or searchable.
 - All secrets are stored as GitHub Actions secrets and never echoed in logs.

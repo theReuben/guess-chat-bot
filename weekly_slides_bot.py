@@ -29,7 +29,6 @@ import requests
 from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request as AuthRequest
 from google.oauth2.credentials import Credentials
-from google.oauth2.service_account import Credentials as ServiceAccountCredentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseUpload
@@ -47,7 +46,7 @@ _TEST_CHANNEL_RAW = os.environ.get("DISCORD_TEST_CHANNEL_ID")
 DISCORD_TEST_CHANNEL_ID: int | None = int(_TEST_CHANNEL_RAW) if _TEST_CHANNEL_RAW else None
 MOD_ROLE_NAME = os.environ.get("MOD_ROLE_NAME", "Mod")
 BOT_MODE = os.environ.get("BOT_MODE", "slides")
-GOOGLE_CREDS_FILE = os.environ.get("GOOGLE_CREDS_FILE", "service_account.json")
+GOOGLE_CREDS_FILE = os.environ.get("GOOGLE_CREDS_FILE", "oauth_token.json")
 GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/presentations",
     "https://www.googleapis.com/auth/drive",
@@ -355,22 +354,9 @@ def get_google_services():
 
     cred_type = token_data.get("type")
 
-    if cred_type == "service_account":
-        print("[info] Using service-account credentials.")
-        creds = ServiceAccountCredentials.from_service_account_info(
-            token_data, scopes=GOOGLE_SCOPES
-        )
-    elif cred_type == "authorized_user":
-        print("[info] Using authorized-user (OAuth2) credentials.")
-        creds = Credentials(
-            token=None,
-            refresh_token=token_data["refresh_token"],
-            client_id=token_data["client_id"],
-            client_secret=token_data["client_secret"],
-            token_uri=token_data.get("token_uri", "https://oauth2.googleapis.com/token"),
-        )
-    elif not cred_type and "refresh_token" in token_data:
-        print("[info] Using OAuth2 user credentials (legacy format).")
+    if cred_type == "authorized_user" or (not cred_type and "refresh_token" in token_data):
+        label = "authorized-user" if cred_type == "authorized_user" else "legacy format"
+        print(f"[info] Using OAuth2 user credentials ({label}).")
         creds = Credentials(
             token=None,
             refresh_token=token_data["refresh_token"],
@@ -386,8 +372,8 @@ def get_google_services():
             hint = (
                 " The file looks like an OAuth client-config JSON "
                 "(it contains an 'installed' or 'web' key). "
-                "You need to provide a service-account key JSON or "
-                "an authorized-user credentials JSON instead."
+                "You need to provide an authorized-user credentials "
+                "JSON instead."
             )
         msg = (
             f"[error] Unrecognised credential file format "
@@ -402,21 +388,12 @@ def get_google_services():
     try:
         creds.refresh(AuthRequest())
     except RefreshError:
-        if cred_type == "service_account":
-            print(
-                "[error] Service-account credentials failed to authenticate. "
-                "The key may be deleted or the service account disabled. "
-                "Please regenerate the key in the Google Cloud console and "
-                "update the credentials file (GOOGLE_CREDS_FILE) or, in CI, "
-                "the GOOGLE_OAUTH_TOKEN secret."
-            )
-        else:
-            print(
-                "[error] Google OAuth token is expired or revoked. "
-                "Please regenerate your refresh token and update the "
-                "credentials file (GOOGLE_CREDS_FILE) or, in CI, "
-                "the GOOGLE_OAUTH_TOKEN secret."
-            )
+        print(
+            "[error] Google OAuth token is expired or revoked. "
+            "Please regenerate your refresh token and update the "
+            "credentials file (GOOGLE_CREDS_FILE) or, in CI, "
+            "the GOOGLE_OAUTH_TOKEN secret."
+        )
         raise
     slides = build("slides", "v1", credentials=creds)
     drive = build("drive", "v3", credentials=creds)

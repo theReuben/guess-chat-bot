@@ -343,8 +343,15 @@ def execute_with_retry(request, max_retries: int = 5) -> Any:
 
 
 def get_google_services():
-    with open(GOOGLE_CREDS_FILE) as f:
-        token_data = json.load(f)
+    try:
+        with open(GOOGLE_CREDS_FILE) as f:
+            token_data = json.load(f)
+    except json.JSONDecodeError:
+        raise ValueError(
+            f"[error] Credentials file {GOOGLE_CREDS_FILE!r} contains invalid JSON. "
+            "If you are in CI, check that the GOOGLE_OAUTH_TOKEN secret was base64-decoded "
+            "correctly and is not empty or truncated."
+        )
 
     cred_type = token_data.get("type")
 

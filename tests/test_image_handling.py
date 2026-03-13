@@ -309,18 +309,18 @@ class TestBodyResizeRequests:
         assert len(reqs) == 2
 
     def test_autofit_shrink_on_overflow_applied(self):
-        """Second request must set SHRINK_TEXT_ON_OVERFLOW on the body element."""
+        """Second request must set TEXT_AUTOFIT on the body element."""
         reqs = _body_resize_requests(self._ELEMS, has_images=False)
         autofit_req = reqs[1]["updateShapeProperties"]
         assert autofit_req["objectId"] == "body_elem"
-        assert autofit_req["shapeProperties"]["autofit"]["autofitType"] == "SHRINK_TEXT_ON_OVERFLOW"
+        assert autofit_req["shapeProperties"]["autofit"]["autofitType"] == "TEXT_AUTOFIT"
         assert autofit_req["fields"] == "autofit.autofitType"
 
     def test_autofit_applied_with_images_too(self):
-        """SHRINK_TEXT_ON_OVERFLOW must also be set when images are present."""
+        """TEXT_AUTOFIT must also be set when images are present."""
         reqs = _body_resize_requests(self._ELEMS, has_images=True)
         autofit_req = reqs[1]["updateShapeProperties"]
-        assert autofit_req["shapeProperties"]["autofit"]["autofitType"] == "SHRINK_TEXT_ON_OVERFLOW"
+        assert autofit_req["shapeProperties"]["autofit"]["autofitType"] == "TEXT_AUTOFIT"
 
     def test_request_targets_body_element(self):
         req = _body_resize_requests(self._ELEMS, has_images=False)[0]

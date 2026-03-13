@@ -335,12 +335,15 @@ class TestBodyResizeRequests:
         req = _body_resize_requests(self._ELEMS, has_images=False)[0]
         assert req["updatePageElementTransform"]["applyMode"] == "ABSOLUTE"
 
-    def test_body_element_positioned_at_content_area(self):
+    def test_body_element_positioned_below_author(self):
         transform = _body_resize_requests(self._ELEMS, has_images=False)[0][
             "updatePageElementTransform"
         ]["transform"]
+        # Author element: y=0, height=55pt, so bottom = 55pt.
+        # Body should be at author_bottom + 6pt gap = 61pt.
+        expected_y = (_AUTHOR_BAR_PT + 6) * _PT
         assert transform["translateX"] == _IMG_MARGIN_PT * _PT
-        assert transform["translateY"] == _AUTHOR_BAR_PT * _PT
+        assert transform["translateY"] == expected_y
 
     def test_body_element_expanded_to_full_content_width(self):
         transform = _body_resize_requests(self._ELEMS, has_images=False)[0][

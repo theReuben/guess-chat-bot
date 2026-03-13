@@ -294,7 +294,7 @@ class TestBodyResizeRequests:
 
     def test_returns_resize_when_has_images(self):
         reqs = _body_resize_requests(self._ELEMS, has_images=True)
-        assert len(reqs) == 2
+        assert len(reqs) == 1
 
     def test_returns_empty_for_no_elements(self):
         assert _body_resize_requests([], has_images=False) == []
@@ -306,21 +306,7 @@ class TestBodyResizeRequests:
 
     def test_returns_single_request_for_text_only(self):
         reqs = _body_resize_requests(self._ELEMS, has_images=False)
-        assert len(reqs) == 2
-
-    def test_autofit_shrink_on_overflow_applied(self):
-        """Second request must set TEXT_AUTOFIT on the body element."""
-        reqs = _body_resize_requests(self._ELEMS, has_images=False)
-        autofit_req = reqs[1]["updateShapeProperties"]
-        assert autofit_req["objectId"] == "body_elem"
-        assert autofit_req["shapeProperties"]["autofit"]["autofitType"] == "TEXT_AUTOFIT"
-        assert autofit_req["fields"] == "autofit.autofitType"
-
-    def test_autofit_applied_with_images_too(self):
-        """TEXT_AUTOFIT must also be set when images are present."""
-        reqs = _body_resize_requests(self._ELEMS, has_images=True)
-        autofit_req = reqs[1]["updateShapeProperties"]
-        assert autofit_req["shapeProperties"]["autofit"]["autofitType"] == "TEXT_AUTOFIT"
+        assert len(reqs) == 1
 
     def test_request_targets_body_element(self):
         req = _body_resize_requests(self._ELEMS, has_images=False)[0]

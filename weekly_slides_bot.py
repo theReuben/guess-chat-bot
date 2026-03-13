@@ -764,16 +764,12 @@ def _find_body_element(page_elements: list[dict]) -> dict | None:
 
 
 def _body_resize_requests(page_elements: list[dict], has_images: bool) -> list[dict]:
-    """Return batchUpdate requests to resize the body text box and enable auto-shrink.
+    """Return batchUpdate requests to resize the body text box.
 
     When *has_images* is False (text-only submission) the body text box is
     expanded to fill the full available content area of the slide.  When
     *has_images* is True the body text box is constrained to the left portion
     of the slide so that it does not overlap with images on the right.
-
-    A ``TEXT_AUTOFIT`` autofit property is also applied so that
-    long submissions shrink their text to fit within the box rather than
-    overflowing and obscuring other elements.
     """
     elem = _find_body_element(page_elements)
     if elem is None:
@@ -803,21 +799,6 @@ def _body_resize_requests(page_elements: list[dict], has_images: bool) -> list[d
                     "unit": "EMU",
                 },
                 "applyMode": "ABSOLUTE",
-            }
-        },
-        {
-            "updateShapeProperties": {
-                "objectId": elem["objectId"],
-                "shapeProperties": {
-                    # TEXT_AUTOFIT is a Google Slides API autofit mode
-                    # that automatically reduces the font size when the text content
-                    # exceeds the shape's boundaries, preventing overlap with adjacent
-                    # images or the author bar.
-                    "autofit": {
-                        "autofitType": "TEXT_AUTOFIT",
-                    }
-                },
-                "fields": "autofit.autofitType",
             }
         },
     ]

@@ -1041,8 +1041,9 @@ def generate_fun_facts(
 
     prompt = (
         f'Here are anonymous submissions for a guessing game about "{topic}".\n'
-        "Write 3–5 fun, short bullet points about commonalities, outliers, "
-        "or interesting patterns.\n"
+        "Write 3–5 succinct bullet points about commonalities, outliers, "
+        "or interesting patterns. Each bullet should be a single concise phrase or short sentence.\n"
+        "Do NOT include any introductory or preamble sentence — output ONLY the bullet points.\n"
         "Do NOT mention any names or identifying information — keep everything "
         "completely anonymous so as not to give away any answers.\n"
         "Format each bullet point on its own line starting with \"• \".\n\n"

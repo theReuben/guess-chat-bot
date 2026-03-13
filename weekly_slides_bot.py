@@ -1015,7 +1015,7 @@ def _video_requests(
 # Fun facts generation (optional, requires GEMINI_API_KEY)
 # ---------------------------------------------------------------------------
 
-_GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+_GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
 
 
 def generate_fun_facts(
@@ -1069,8 +1069,8 @@ def generate_fun_facts(
         text = data["candidates"][0]["content"]["parts"][0]["text"]
         print("[info] Fun facts generated successfully.")
         return text.strip()
-    except Exception:  # noqa: BLE001
-        print("[warn] Failed to generate fun facts via Gemini API; placeholder will be cleared.")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[warn] Failed to generate fun facts via Gemini API ({exc}); placeholder will be cleared.")
         return ""
 
 

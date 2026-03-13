@@ -98,7 +98,7 @@ The bot can automatically generate fun facts about each round's submissions usin
 4. Copy the generated key — this is your `GEMINI_API_KEY`.
 5. Add it as a GitHub Actions secret (see [GitHub Secrets](#github-secrets) below) or to your `.env` file for local runs.
 
-> **Cost:** The Gemini API free tier allows **15 requests per minute** and **1,500 requests per day** for `gemini-2.0-flash` — more than enough for this bot, which makes one request per round. There is no charge unless you explicitly upgrade to a paid plan. See the [Gemini API pricing page](https://ai.google.dev/pricing) for current limits.
+> **Cost:** The Gemini API free tier allows **15 requests per minute** and **1,500 requests per day** for `gemini-2.5-flash` — more than enough for this bot, which makes one request per round. There is no charge unless you explicitly upgrade to a paid plan. See the [Gemini API pricing page](https://ai.google.dev/pricing) for current limits.
 
 ### Template Deck
 
@@ -277,7 +277,7 @@ The slides guard uses a 30-minute grace window (12:00–12:29 UK) to survive Git
 
 ## Cost
 
-Running on GitHub Actions free tier: **$0/month**. Each run takes under a minute. The optional Gemini fun-facts feature uses the free tier of the Gemini API (up to 1,500 requests/day for `gemini-2.0-flash`), so there is no additional cost.
+Running on GitHub Actions free tier: **$0/month**. Each run takes under a minute. The optional Gemini fun-facts feature uses the free tier of the Gemini API (up to 1,500 requests/day for `gemini-2.5-flash`), so there is no additional cost.
 
 ---
 

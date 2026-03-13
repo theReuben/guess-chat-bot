@@ -764,12 +764,14 @@ def _find_body_element(page_elements: list[dict]) -> dict | None:
 
 
 def _body_resize_requests(page_elements: list[dict], has_images: bool) -> list[dict]:
-    """Return batchUpdate requests to resize the body text box.
+    """Return batchUpdate requests to reposition and resize the body text box.
 
-    When *has_images* is False (text-only submission) the body text box is
-    expanded to fill the full available content area of the slide.  When
-    *has_images* is True the body text box is constrained to the left portion
-    of the slide so that it does not overlap with images on the right.
+    The body text box is placed just below the author bar and sized to fill the
+    remaining slide area.  When *has_images* is True the box is constrained to
+    the left portion so that it does not overlap with images on the right.
+
+    Content alignment is set to TOP so text anchors to the top of the box and
+    any overflow extends downward rather than into the author bar.
     """
     elem = _find_body_element(page_elements)
     if elem is None:
@@ -794,11 +796,22 @@ def _body_resize_requests(page_elements: list[dict], has_images: bool) -> list[d
                 "transform": {
                     "scaleX": area_w / elem_w,
                     "scaleY": area_h / elem_h,
+                    "shearX": 0,
+                    "shearY": 0,
                     "translateX": area_x,
                     "translateY": area_y,
                     "unit": "EMU",
                 },
                 "applyMode": "ABSOLUTE",
+            }
+        },
+        {
+            "updateShapeProperties": {
+                "objectId": elem["objectId"],
+                "shapeProperties": {
+                    "contentAlignment": "TOP",
+                },
+                "fields": "contentAlignment",
             }
         },
     ]

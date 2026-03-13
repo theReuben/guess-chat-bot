@@ -298,7 +298,7 @@ class TestBodyResizeRequests:
 
     def test_returns_resize_when_has_images(self):
         reqs = _body_resize_requests(self._ELEMS, has_images=True)
-        assert len(reqs) == 1
+        assert len(reqs) == 2
 
     def test_returns_empty_for_no_elements(self):
         assert _body_resize_requests([], has_images=False) == []
@@ -308,9 +308,24 @@ class TestBodyResizeRequests:
         only_author = [self._ELEMS[0]]  # only the author bar element (y=0)
         assert _body_resize_requests(only_author, has_images=False) == []
 
-    def test_returns_single_request_for_text_only(self):
+    def test_returns_transform_and_alignment_requests(self):
         reqs = _body_resize_requests(self._ELEMS, has_images=False)
-        assert len(reqs) == 1
+        assert len(reqs) == 2
+        assert "updatePageElementTransform" in reqs[0]
+        assert "updateShapeProperties" in reqs[1]
+
+    def test_content_alignment_top(self):
+        reqs = _body_resize_requests(self._ELEMS, has_images=False)
+        shape_req = reqs[1]["updateShapeProperties"]
+        assert shape_req["shapeProperties"]["contentAlignment"] == "TOP"
+        assert shape_req["fields"] == "contentAlignment"
+
+    def test_transform_has_zero_shear(self):
+        transform = _body_resize_requests(self._ELEMS, has_images=False)[0][
+            "updatePageElementTransform"
+        ]["transform"]
+        assert transform["shearX"] == 0
+        assert transform["shearY"] == 0
 
     def test_request_targets_body_element(self):
         req = _body_resize_requests(self._ELEMS, has_images=False)[0]

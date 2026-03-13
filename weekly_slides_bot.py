@@ -771,7 +771,7 @@ def _body_resize_requests(page_elements: list[dict], has_images: bool) -> list[d
     *has_images* is True the body text box is constrained to the left portion
     of the slide so that it does not overlap with images on the right.
 
-    A ``SHRINK_TEXT_ON_OVERFLOW`` autofit property is also applied so that
+    A ``TEXT_AUTOFIT`` autofit property is also applied so that
     long submissions shrink their text to fit within the box rather than
     overflowing and obscuring other elements.
     """
@@ -809,12 +809,12 @@ def _body_resize_requests(page_elements: list[dict], has_images: bool) -> list[d
             "updateShapeProperties": {
                 "objectId": elem["objectId"],
                 "shapeProperties": {
-                    # SHRINK_TEXT_ON_OVERFLOW is a Google Slides API autofit mode
+                    # TEXT_AUTOFIT is a Google Slides API autofit mode
                     # that automatically reduces the font size when the text content
                     # exceeds the shape's boundaries, preventing overlap with adjacent
                     # images or the author bar.
                     "autofit": {
-                        "autofitType": "SHRINK_TEXT_ON_OVERFLOW",
+                        "autofitType": "TEXT_AUTOFIT",
                     }
                 },
                 "fields": "autofit.autofitType",

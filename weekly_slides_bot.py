@@ -763,12 +763,33 @@ def _find_body_element(page_elements: list[dict]) -> dict | None:
     return None
 
 
+def _author_bottom_emu(page_elements: list[dict]) -> int:
+    """Return the bottom edge (in EMU) of the author element on the slide.
+
+    Falls back to ``_AUTHOR_BAR_PT * _PT`` when the author element cannot be
+    found or its geometry is incomplete.
+    """
+    author = _find_author_element(page_elements)
+    if author is None:
+        return int(_AUTHOR_BAR_PT * _PT)
+
+    t = author.get("transform", {})
+    y = t.get("translateY", 0)
+    scale_y = t.get("scaleY", 1)
+    intrinsic_h = author.get("size", {}).get("height", {}).get("magnitude", 0)
+    rendered_h = intrinsic_h * scale_y
+    bottom = y + rendered_h
+    # Never let the gap be less than _AUTHOR_BAR_PT (sanity floor)
+    return int(max(bottom, _AUTHOR_BAR_PT * _PT))
+
+
 def _body_resize_requests(page_elements: list[dict], has_images: bool) -> list[dict]:
     """Return batchUpdate requests to reposition and resize the body text box.
 
-    The body text box is placed just below the author bar and sized to fill the
-    remaining slide area.  When *has_images* is True the box is constrained to
-    the left portion so that it does not overlap with images on the right.
+    The body text box is placed just below the author element's actual bottom
+    edge (with a small gap) and sized to fill the remaining slide area.  When
+    *has_images* is True the box is constrained to the left portion so that it
+    does not overlap with images on the right.
 
     Content alignment is set to TOP so text anchors to the top of the box and
     any overflow extends downward rather than into the author bar.
@@ -777,9 +798,11 @@ def _body_resize_requests(page_elements: list[dict], has_images: bool) -> list[d
     if elem is None:
         return []
 
+    gap = 6 * _PT  # 6pt gap between author and body
+    author_bottom = _author_bottom_emu(page_elements)
     area_x = _IMG_MARGIN_PT * _PT
-    area_y = _AUTHOR_BAR_PT * _PT
-    area_h = (_SLIDE_H_PT - _AUTHOR_BAR_PT - _IMG_MARGIN_PT) * _PT
+    area_y = author_bottom + gap
+    area_h = _SLIDE_H_PT * _PT - area_y - _IMG_MARGIN_PT * _PT
 
     if has_images:
         area_w = (_TEXT_SPLIT_PT - _TEXT_IMG_GAP_PT - _IMG_MARGIN_PT) * _PT

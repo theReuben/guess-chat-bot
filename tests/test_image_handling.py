@@ -15,14 +15,18 @@ os.environ.setdefault("TEMPLATE_DECK_ID", "tpl")
 
 from weekly_slides_bot import (
     _AUTHOR_BAR_PT,
+    _DEFAULT_FONT_PT,
     _IMG_MARGIN_PT,
+    _MIN_FONT_PT,
     _PT,
     _SLIDE_H_PT,
     _SLIDE_W_PT,
     _TEXT_IMG_GAP_PT,
     _TEXT_SPLIT_PT,
+    _body_font_size_pt,
     _body_resize_requests,
     _image_requests,
+    _text_fit_requests,
     generate_slides,
 )
 
@@ -361,3 +365,47 @@ class TestBodyResizeRequests:
         left = transform["translateX"]
         right_edge_pt = (left + rendered_w) / _PT
         assert right_edge_pt <= _TEXT_SPLIT_PT - _TEXT_IMG_GAP_PT
+
+
+class TestBodyFontSize:
+    """Tests for _body_font_size_pt text scaling heuristic."""
+
+    def test_short_text_uses_default(self):
+        assert _body_font_size_pt("Hello world", has_images=False) == _DEFAULT_FONT_PT
+
+    def test_empty_text_uses_default(self):
+        assert _body_font_size_pt("", has_images=False) == _DEFAULT_FONT_PT
+
+    def test_long_text_shrinks(self):
+        long_text = "word " * 500
+        size = _body_font_size_pt(long_text, has_images=False)
+        assert size < _DEFAULT_FONT_PT
+
+    def test_never_below_minimum(self):
+        huge_text = "word " * 5000
+        size = _body_font_size_pt(huge_text, has_images=False)
+        assert size >= _MIN_FONT_PT
+
+    def test_images_shrinks_more(self):
+        """Narrower box with images should produce a smaller font."""
+        text = "word " * 200
+        size_no_img = _body_font_size_pt(text, has_images=False)
+        size_img = _body_font_size_pt(text, has_images=True)
+        assert size_img <= size_no_img
+
+
+class TestTextFitRequests:
+    """Tests for _text_fit_requests."""
+
+    def test_short_text_returns_empty(self):
+        assert _text_fit_requests("elem1", "Hi", has_images=False) == []
+
+    def test_long_text_returns_font_style(self):
+        long_text = "word " * 500
+        reqs = _text_fit_requests("elem1", long_text, has_images=False)
+        assert len(reqs) == 1
+        style_req = reqs[0]["updateTextStyle"]
+        assert style_req["objectId"] == "elem1"
+        assert style_req["textRange"]["type"] == "ALL"
+        assert style_req["style"]["fontSize"]["unit"] == "PT"
+        assert style_req["style"]["fontSize"]["magnitude"] < _DEFAULT_FONT_PT

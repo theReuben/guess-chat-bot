@@ -804,6 +804,73 @@ def _body_resize_requests(page_elements: list[dict], has_images: bool) -> list[d
     ]
 
 
+_DEFAULT_FONT_PT = 18   # base font size for short body text
+_MIN_FONT_PT = 8        # never go smaller than this
+
+
+def _body_font_size_pt(body_text: str, has_images: bool) -> float:
+    """Choose a font size (in pt) so *body_text* fits the body text box.
+
+    Uses a simple heuristic: estimate how many characters fit on one line at
+    the given font size, compute the number of lines needed, and shrink the
+    font until the text fits the available height.  Explicit newlines in the
+    text count as line breaks.
+    """
+    if not body_text:
+        return _DEFAULT_FONT_PT
+
+    if has_images:
+        box_w_pt = _TEXT_SPLIT_PT - _TEXT_IMG_GAP_PT - _IMG_MARGIN_PT  # ~356pt
+    else:
+        box_w_pt = _SLIDE_W_PT - 2 * _IMG_MARGIN_PT  # ~672pt
+
+    box_h_pt = _SLIDE_H_PT - _AUTHOR_BAR_PT - _IMG_MARGIN_PT  # ~326pt
+
+    font_size = _DEFAULT_FONT_PT
+
+    while font_size >= _MIN_FONT_PT:
+        # Average character width ≈ 0.55 × font size for proportional fonts
+        chars_per_line = max(1, int(box_w_pt / (font_size * 0.55)))
+        line_height = font_size * 1.3  # typical line spacing
+
+        # Count lines: wrap each paragraph independently
+        lines = 0
+        for paragraph in body_text.split("\n"):
+            if not paragraph.strip():
+                lines += 1  # blank line
+            else:
+                lines += max(1, -(-len(paragraph) // chars_per_line))  # ceil division
+
+        total_height = lines * line_height
+        if total_height <= box_h_pt:
+            break
+        font_size -= 1
+
+    return max(font_size, _MIN_FONT_PT)
+
+
+def _text_fit_requests(element_id: str, body_text: str, has_images: bool) -> list[dict]:
+    """Return updateTextStyle requests to scale body text to fit its box."""
+    font_size = _body_font_size_pt(body_text, has_images)
+    if font_size >= _DEFAULT_FONT_PT:
+        return []  # template default is fine
+    return [
+        {
+            "updateTextStyle": {
+                "objectId": element_id,
+                "textRange": {"type": "ALL"},
+                "style": {
+                    "fontSize": {
+                        "magnitude": font_size,
+                        "unit": "PT",
+                    }
+                },
+                "fields": "fontSize",
+            }
+        }
+    ]
+
+
 def _to_utf16_index(text: str, index: int) -> int:
     """Convert a Python string index to a UTF-16 code unit index for Slides.
 
@@ -1109,9 +1176,12 @@ def build_deck(
         page_elements = new_slide.get("pageElements", [])
         post_reqs: list[dict] = []
         post_reqs.extend(_body_resize_requests(page_elements, has_media))
-        if has_urls:
-            body_elem = _find_body_element(page_elements)
-            if body_elem:
+        body_elem = _find_body_element(page_elements)
+        if body_elem:
+            post_reqs.extend(
+                _text_fit_requests(body_elem["objectId"], body_text, has_media)
+            )
+            if has_urls:
                 post_reqs.extend(
                     _hyperlink_requests(body_elem["objectId"], body_text)
                 )
@@ -1326,6 +1396,25 @@ def append_slides(
                     body={"requests": text_requests},
                 )
             )
+
+        # Scale body text to fit and add hyperlinks
+        if body_obj_id:
+            style_reqs: list[dict] = []
+            style_reqs.extend(
+                _text_fit_requests(body_obj_id, body_text, has_media)
+            )
+            has_urls = bool(_URL_RE.search(body_text))
+            if has_urls:
+                style_reqs.extend(
+                    _hyperlink_requests(body_obj_id, body_text)
+                )
+            if style_reqs:
+                execute_with_retry(
+                    slides_svc.presentations().batchUpdate(
+                        presentationId=pres_id,
+                        body={"requests": style_reqs},
+                    )
+                )
 
         # Insert images
         if image_urls:

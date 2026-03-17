@@ -1635,8 +1635,12 @@ async def generate_slides(client: discord.Client) -> None:
 
     if not all_submissions:
         # In preview/test_slides mode, re-post the existing deck links from state so
-        # that the pipeline can always be verified.
-        if BOT_MODE in ("preview", "test_slides") and state.get("named_pres_id"):
+        # that the pipeline can always be verified.  However, if the marker has
+        # changed (new round), the old decks are stale — notify the mod channel
+        # about the new topic instead of re-posting irrelevant links.
+        prev_marker_id = state.get("marker_id")
+        is_new_round = prev_marker_id != marker_id
+        if BOT_MODE in ("preview", "test_slides") and state.get("named_pres_id") and not is_new_round:
             print("[info] No SUBMISSION messages found — re-posting existing deck links.")
             named_pres_id = state["named_pres_id"]
             anon_pres_id = state["anon_pres_id"]
@@ -1653,6 +1657,21 @@ async def generate_slides(client: discord.Client) -> None:
                     msg_text = format_results_message(post_topic, [], named_url, anon_url)
                     await post_channel.send(msg_text)
                     print("[info] Posted results to channel.")
+            return
+        if BOT_MODE in ("preview", "test_slides") and is_new_round:
+            print(f"[info] New round detected (topic: '{topic}') but no submissions yet.")
+            if BOT_MODE == "test_slides":
+                notify_channel_id = DISCORD_TEST_CHANNEL_ID
+            else:
+                notify_channel_id = DISCORD_MOD_CHANNEL_ID
+            if notify_channel_id is not None:
+                notify_channel = client.get_channel(notify_channel_id)
+                if notify_channel is not None:
+                    await notify_channel.send(
+                        f"New Guess Chat round detected: **{topic}**\n"
+                        f"No submissions yet — will generate slides once submissions arrive."
+                    )
+                    print("[info] Posted new-round notice to channel.")
             return
         print("[info] No SUBMISSION messages found after the marker.")
         return

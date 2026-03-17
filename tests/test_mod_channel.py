@@ -1207,6 +1207,7 @@ class TestPreviewModeRouting:
     @patch(
         "weekly_slides_bot.load_state",
         return_value={
+            "marker_id": "100",
             "named_pres_id": "existing_named",
             "anon_pres_id": "existing_anon",
             "topic": "Old Topic",
@@ -1214,7 +1215,7 @@ class TestPreviewModeRouting:
     )
     async def test_preview_posts_existing_decks_when_no_submissions(self, _load):
         """Preview mode should post existing deck links from state even when
-        there are no SUBMISSION messages at all."""
+        there are no SUBMISSION messages at all (same round)."""
         from weekly_slides_bot import generate_slides
 
         marker_msg = MagicMock()
@@ -1232,10 +1233,42 @@ class TestPreviewModeRouting:
     @pytest.mark.asyncio
     @patch("weekly_slides_bot.BOT_MODE", "preview")
     @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)
+    @patch(
+        "weekly_slides_bot.load_state",
+        return_value={
+            "marker_id": "50",
+            "named_pres_id": "existing_named",
+            "anon_pres_id": "existing_anon",
+            "topic": "Old Topic",
+        },
+    )
+    async def test_preview_new_round_no_submissions_posts_notice(self, _load):
+        """Preview mode should notify the mod channel about a new round
+        instead of re-posting stale deck links from the old round."""
+        from weekly_slides_bot import generate_slides
+
+        marker_msg = MagicMock()
+        marker_msg.id = 100
+        marker_msg.content = "GUESS CHAT New Topic"
+
+        mock_client, mock_results_channel, mock_mod_channel = (
+            self._make_client_with_marker_no_submissions(marker_msg)
+        )
+        await generate_slides(mock_client)
+
+        mock_mod_channel.send.assert_called_once()
+        sent_text = mock_mod_channel.send.call_args[0][0]
+        assert "New Topic" in sent_text
+        assert "No submissions yet" in sent_text
+        mock_results_channel.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("weekly_slides_bot.BOT_MODE", "preview")
+    @patch("weekly_slides_bot.DISCORD_MOD_CHANNEL_ID", 3)
     @patch("weekly_slides_bot.load_state", return_value={})
-    async def test_preview_no_submissions_no_state_does_not_post(self, _load):
-        """Preview mode with no submissions and no existing decks in state
-        should not post anything (nothing to show)."""
+    async def test_preview_no_submissions_no_state_posts_new_round_notice(self, _load):
+        """Preview mode with no submissions and no state should post a
+        new-round notice (empty state means the marker is always new)."""
         from weekly_slides_bot import generate_slides
 
         marker_msg = MagicMock()
@@ -1247,5 +1280,7 @@ class TestPreviewModeRouting:
         )
         await generate_slides(mock_client)
 
-        mock_mod_channel.send.assert_not_called()
+        mock_mod_channel.send.assert_called_once()
+        sent_text = mock_mod_channel.send.call_args[0][0]
+        assert "No submissions yet" in sent_text
         mock_results_channel.send.assert_not_called()

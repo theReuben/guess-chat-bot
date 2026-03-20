@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import ssl
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -166,3 +167,73 @@ class TestExecuteWithRetryRefreshError:
         captured = capsys.readouterr()
         assert "credential refresh failed" in captured.out
         assert "GOOGLE_OAUTH_TOKEN" in captured.out
+
+
+class TestExecuteWithRetryConnectionErrors:
+    """Transient connection/SSL errors are retried with backoff."""
+
+    @patch("weekly_slides_bot.time.sleep")
+    def test_retries_on_ssl_eof_error(self, mock_sleep):
+        request = MagicMock()
+        request.execute.side_effect = [
+            ssl.SSLEOFError("EOF occurred in violation of protocol (_ssl.c:2427)"),
+            {"ok": True},
+        ]
+        result = execute_with_retry(request)
+        assert result == {"ok": True}
+        assert request.execute.call_count == 2
+        mock_sleep.assert_called_once()
+
+    @patch("weekly_slides_bot.time.sleep")
+    def test_retries_on_ssl_error(self, mock_sleep):
+        request = MagicMock()
+        request.execute.side_effect = [
+            ssl.SSLError("SSL handshake failed"),
+            {"ok": True},
+        ]
+        result = execute_with_retry(request)
+        assert result == {"ok": True}
+        assert request.execute.call_count == 2
+
+    @patch("weekly_slides_bot.time.sleep")
+    def test_retries_on_connection_reset_error(self, mock_sleep):
+        request = MagicMock()
+        request.execute.side_effect = [
+            ConnectionResetError("Connection reset by peer"),
+            {"ok": True},
+        ]
+        result = execute_with_retry(request)
+        assert result == {"ok": True}
+        assert request.execute.call_count == 2
+
+    @patch("weekly_slides_bot.time.sleep")
+    def test_retries_on_connection_error(self, mock_sleep):
+        request = MagicMock()
+        request.execute.side_effect = [
+            ConnectionError("Connection refused"),
+            {"ok": True},
+        ]
+        result = execute_with_retry(request)
+        assert result == {"ok": True}
+        assert request.execute.call_count == 2
+
+    @patch("weekly_slides_bot.time.sleep")
+    def test_raises_after_max_retries_on_ssl_error(self, mock_sleep):
+        request = MagicMock()
+        request.execute.side_effect = ssl.SSLEOFError("EOF occurred")
+        with pytest.raises(ssl.SSLEOFError):
+            execute_with_retry(request, max_retries=3)
+        assert request.execute.call_count == 4  # 1 initial + 3 retries
+        assert mock_sleep.call_count == 3
+
+    @patch("weekly_slides_bot.time.sleep")
+    def test_prints_warning_on_connection_error(self, mock_sleep, capsys):
+        request = MagicMock()
+        request.execute.side_effect = [
+            ssl.SSLEOFError("EOF occurred"),
+            {"ok": True},
+        ]
+        execute_with_retry(request)
+        captured = capsys.readouterr()
+        assert "Transient connection error" in captured.out
+        assert "retrying" in captured.out

@@ -18,6 +18,7 @@ import json
 import os
 import random
 import re
+import ssl
 import time
 import traceback
 import zoneinfo
@@ -329,6 +330,16 @@ def execute_with_retry(request, max_retries: int = 5) -> Any:
                 wait = (2 ** attempt) + random.random()
                 print(
                     f"[warn] Google API error (HTTP {status}); "
+                    f"retrying in {wait:.1f}s (attempt {attempt + 1}/{max_retries})"
+                )
+                time.sleep(wait)
+            else:
+                raise
+        except (ssl.SSLEOFError, ssl.SSLError, ConnectionError, OSError) as exc:
+            if attempt < max_retries:
+                wait = (2 ** attempt) + random.random()
+                print(
+                    f"[warn] Transient connection error: {exc!r}; "
                     f"retrying in {wait:.1f}s (attempt {attempt + 1}/{max_retries})"
                 )
                 time.sleep(wait)

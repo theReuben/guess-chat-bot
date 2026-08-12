@@ -279,7 +279,7 @@ Access is restricted two ways: the command is registered with `default_member_pe
 
 1. **Deploy.** Create a Vercel project from this repo and set **Root Directory** to `vercel`. This matters — it keeps the function's dependencies (just PyNaCl) separate from the bot's, so cold starts stay fast.
 
-2. **Create a GitHub token** — a fine-grained PAT scoped to this repository with **Actions: read and write**.
+2. **Create a GitHub token** — a fine-grained PAT scoped to this repository with **Actions: read and write** (to trigger the workflow) and **Contents: read** (so `/guesschat status` can read `state.json` from the `state` branch).
 
 3. **Set the Vercel environment variables:**
 

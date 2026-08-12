@@ -13,7 +13,8 @@ Environment (set these in the Vercel project settings):
 ``DISCORD_PUBLIC_KEY``      App's public key, for Ed25519 signature checks
 ``DISCORD_GUILD_ID``        Only this guild may invoke the commands
 ``DISCORD_MOD_ROLE_ID``     Optional; when set the invoker must hold this role
-``GH_DISPATCH_TOKEN``       GitHub token with ``actions: write`` on the repo
+``GH_DISPATCH_TOKEN``       GitHub token with ``actions: write`` (dispatch) and
+                            ``contents: read`` (``/guesschat status``)
 ``GITHUB_REPOSITORY``       ``owner/repo``
 ``GITHUB_WORKFLOW_FILE``    Workflow filename (default ``weekly-slides.yml``)
 ``GITHUB_REF``              Branch to run the workflow from (default ``main``)

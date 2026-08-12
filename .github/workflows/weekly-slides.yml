@@ -31,6 +31,11 @@ on:
           - 'announce'
           - 'test_slides'
           - 'test_announce'
+      marker_message_id:
+        description: 'Message ID to use as the GUESS CHAT announcement (when someone else announced it)'
+        required: false
+        default: ''
+        type: string
 
 concurrency:
   group: guess-chat
@@ -113,6 +118,7 @@ jobs:
           DISCORD_MOD_CHANNEL_ID: ${{ secrets.DISCORD_MOD_CHANNEL_ID }}
           DISCORD_TEST_CHANNEL_ID: ${{ secrets.DISCORD_TEST_CHANNEL_ID }}
           BOT_MODE: ${{ env.BOT_MODE }}
+          MARKER_MESSAGE_ID: ${{ github.event.inputs.marker_message_id }}
           DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
           TEMPLATE_DECK_ID: ${{ secrets.TEMPLATE_DECK_ID }}
           GOOGLE_CREDS_FILE: oauth_token.json

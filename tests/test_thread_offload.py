@@ -64,6 +64,7 @@ class TestBlockingCallsOffloaded:
             "",           # generate_fun_facts
             [],           # build_deck (named)
             [],           # build_deck (anon)
+            [],           # collect_deck_authors
             None,         # save_state
         ]
 
@@ -85,7 +86,7 @@ class TestBlockingCallsOffloaded:
         await generate_slides(mock_client)
 
         # Verify to_thread was called for each blocking operation
-        assert mock_to_thread.await_count == 11
+        assert mock_to_thread.await_count == 12
         called_funcs = [c.args[0].__name__ for c in mock_to_thread.call_args_list]
         assert called_funcs == [
             "get_google_services",
@@ -98,6 +99,7 @@ class TestBlockingCallsOffloaded:
             "generate_fun_facts",
             "build_deck",
             "build_deck",
+            "collect_deck_authors",
             "save_state",
         ]
 
@@ -119,6 +121,7 @@ class TestBlockingCallsOffloaded:
             (mock_slides_svc, mock_drive_svc),  # get_google_services
             [],    # append_slides (named)
             [],    # append_slides (anon)
+            [],    # collect_deck_authors
             None,  # save_state
         ]
 
@@ -139,11 +142,12 @@ class TestBlockingCallsOffloaded:
         mock_client = self._make_client(marker_msg, sub_msg)
         await generate_slides(mock_client)
 
-        assert mock_to_thread.await_count == 4
+        assert mock_to_thread.await_count == 5
         called_funcs = [c.args[0].__name__ for c in mock_to_thread.call_args_list]
         assert called_funcs == [
             "get_google_services",
             "append_slides",
             "append_slides",
+            "collect_deck_authors",
             "save_state",
         ]

@@ -38,7 +38,9 @@ MANAGE_GUILD = "32"
 # so every request has to identify itself the way the API docs require.
 USER_AGENT = "DiscordBot (https://github.com/theReuben/guess-chat-bot, 1.0)"
 
-MODES = ("preview", "slides", "announce", "test_slides", "test_announce")
+MODES = (
+    "preview", "slides", "announce", "test_slides", "test_announce", "strim",
+)
 _MODE_CHOICES = [{"name": mode, "value": mode} for mode in MODES]
 
 COMMANDS = [
@@ -51,6 +53,11 @@ COMMANDS = [
                 "type": SUB_COMMAND,
                 "name": "preview",
                 "description": "Rebuild the decks and post the result to the mod channel",
+            },
+            {
+                "type": SUB_COMMAND,
+                "name": "time",
+                "description": "Guess chat time! Generate the slides and post them to #strim-tim",
             },
             {
                 "type": SUB_COMMAND,

@@ -45,6 +45,8 @@ _MOD_CHANNEL_RAW = os.environ.get("DISCORD_MOD_CHANNEL_ID")
 DISCORD_MOD_CHANNEL_ID: int | None = int(_MOD_CHANNEL_RAW) if _MOD_CHANNEL_RAW else None
 _TEST_CHANNEL_RAW = os.environ.get("DISCORD_TEST_CHANNEL_ID")
 DISCORD_TEST_CHANNEL_ID: int | None = int(_TEST_CHANNEL_RAW) if _TEST_CHANNEL_RAW else None
+_STRIM_CHANNEL_RAW = os.environ.get("DISCORD_STRIM_CHANNEL_ID")
+DISCORD_STRIM_CHANNEL_ID: int | None = int(_STRIM_CHANNEL_RAW) if _STRIM_CHANNEL_RAW else None
 MOD_ROLE_NAME = os.environ.get("MOD_ROLE_NAME", "Mod")
 BOT_MODE = os.environ.get("BOT_MODE", "slides")
 GOOGLE_CREDS_FILE = os.environ.get("GOOGLE_CREDS_FILE", "oauth_token.json")
@@ -1622,6 +1624,25 @@ def format_error_message(
 
 
 # ---------------------------------------------------------------------------
+# Mode routing
+# ---------------------------------------------------------------------------
+
+# Modes that still post when there is nothing new to add, re-showing the
+# current decks rather than exiting silently.  ``slides`` is deliberately
+# absent: the Friday run must stay quiet when it has nothing to say.
+REPOSTING_MODES = ("preview", "test_slides", "strim")
+
+
+def notice_channel_id() -> int | None:
+    """Channel for mode-specific notices (deck re-posts, new-round notices)."""
+    if BOT_MODE == "test_slides":
+        return DISCORD_TEST_CHANNEL_ID
+    if BOT_MODE == "strim":
+        return DISCORD_STRIM_CHANNEL_ID
+    return DISCORD_MOD_CHANNEL_ID
+
+
+# ---------------------------------------------------------------------------
 # Core logic
 # ---------------------------------------------------------------------------
 
@@ -1748,21 +1769,18 @@ async def generate_slides(client: discord.Client) -> None:
             conversation_messages.append(msg.content.strip())
 
     if not all_submissions:
-        # In preview/test_slides mode, re-post the existing deck links from state so
+        # In the re-posting modes, re-post the existing deck links from state so
         # that the pipeline can always be verified.  However, if the marker has
         # changed (new round), the old decks are stale — notify the mod channel
         # about the new topic instead of re-posting irrelevant links.
         prev_marker_id = state.get("marker_id")
         is_new_round = prev_marker_id != marker_id
-        if BOT_MODE in ("preview", "test_slides") and state.get("named_pres_id") and not is_new_round:
+        if BOT_MODE in REPOSTING_MODES and state.get("named_pres_id") and not is_new_round:
             print("[info] No SUBMISSION messages found — re-posting existing deck links.")
             named_pres_id = state["named_pres_id"]
             anon_pres_id = state["anon_pres_id"]
             post_topic = state.get("topic", topic)
-            if BOT_MODE == "test_slides":
-                repost_channel_id = DISCORD_TEST_CHANNEL_ID
-            else:
-                repost_channel_id = DISCORD_MOD_CHANNEL_ID
+            repost_channel_id = notice_channel_id()
             if repost_channel_id is not None:
                 post_channel = client.get_channel(repost_channel_id)
                 if post_channel is not None:
@@ -1778,12 +1796,9 @@ async def generate_slides(client: discord.Client) -> None:
                     await post_channel.send(msg_text)
                     print("[info] Posted results to channel.")
             return
-        if BOT_MODE in ("preview", "test_slides") and is_new_round:
+        if BOT_MODE in REPOSTING_MODES and is_new_round:
             print(f"[info] New round detected (topic: '{topic}') but no submissions yet.")
-            if BOT_MODE == "test_slides":
-                notify_channel_id = DISCORD_TEST_CHANNEL_ID
-            else:
-                notify_channel_id = DISCORD_MOD_CHANNEL_ID
+            notify_channel_id = notice_channel_id()
             if notify_channel_id is not None:
                 notify_channel = client.get_channel(notify_channel_id)
                 if notify_channel is not None:
@@ -1843,7 +1858,7 @@ async def generate_slides(client: discord.Client) -> None:
     new_submissions = [s for s in all_submissions if s["id"] not in processed_ids]
 
     if not new_submissions:
-        if BOT_MODE not in ("preview", "test_slides"):
+        if BOT_MODE not in REPOSTING_MODES:
             print("[info] No new submissions since last run; nothing to do.")
             return
         print("[info] No new submissions — will still post current results.")
@@ -1872,8 +1887,17 @@ async def generate_slides(client: discord.Client) -> None:
     # Post results
     # In preview mode the message goes to the mod channel for a sanity check
     # before the public Friday post; in test_slides mode it goes to the test
-    # channel; in normal slides mode it goes to the public results channel.
-    if BOT_MODE == "test_slides":
+    # channel; in strim mode it goes to the stream channel where the round is
+    # played; in normal slides mode it goes to the public results channel.
+    if BOT_MODE == "strim":
+        if DISCORD_STRIM_CHANNEL_ID is None:
+            print("[error] strim mode requires DISCORD_STRIM_CHANNEL_ID to be set; skipping post.")
+            post_channel = None
+        else:
+            post_channel = client.get_channel(DISCORD_STRIM_CHANNEL_ID)
+            if post_channel is None:
+                print(f"[error] Could not find strim channel {DISCORD_STRIM_CHANNEL_ID}")
+    elif BOT_MODE == "test_slides":
         if DISCORD_TEST_CHANNEL_ID is None:
             print("[error] test_slides mode requires DISCORD_TEST_CHANNEL_ID to be set; skipping post.")
             post_channel = None
@@ -2134,7 +2158,7 @@ class OneShotClient(discord.Client):
         try:
             if BOT_MODE in ("announce", "test_announce"):
                 await check_mod_and_announce(self)
-            elif BOT_MODE in ("slides", "preview", "test_slides"):
+            elif BOT_MODE in ("slides", "preview", "test_slides", "strim"):
                 await generate_slides(self)
             else:
                 print(f"[warn] Unknown BOT_MODE '{BOT_MODE}'; proceeding with generate_slides.")

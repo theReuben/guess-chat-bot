@@ -7,6 +7,9 @@ oauth_token.json
 # State
 state.json
 
+# Vercel
+.vercel/
+
 # Python artifacts
 __pycache__/
 *.pyc

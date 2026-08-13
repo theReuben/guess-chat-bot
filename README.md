@@ -20,6 +20,8 @@ When a mod updates the submissions channel description to `Current Guess Chat: <
 
 - **Round detection** — detects new rounds by tracking the marker message ID in `state.json`.
 - **Channel-description announcement** — reads the channel description for the current topic and posts a `GUESS CHAT` marker automatically.
+- **Announcement override** — set `MARKER_MESSAGE_ID` (or the `marker_message_id` workflow input) to point the bot at an announcement someone else posted; the bot adopts that message as the round marker instead of posting its own. See [Announcement Override](#announcement-override).
+- **Manually added slides are listed** — the submitter list in the results message is read back off the **named** deck as well as from Discord, so slides added by hand (mod extras, submissions relayed from elsewhere) appear alongside the rest.
 - **Mod channel confirmation** — after posting a new announcement, sends a confirmation to the mod channel with `@Mods`, the new theme, a link to the posted message, and asks whether there are any extras to add.
 - **Friday reminder** — if the topic hasn't changed by the Friday run, sends a reminder to the mod channel asking if there's a new guess chat this week.
 - **Error routing** — processing errors (e.g. image upload failures) are sent to the mod channel when configured, falling back to the results channel.
@@ -34,6 +36,7 @@ When a mod updates the submissions channel description to `Current Guess Chat: <
 - **API retry with backoff** — transient Google API errors (429, 500, 503) are retried with exponential backoff.
 - **Scheduled runs** — GitHub Actions triggers every Friday at 11:30 AM UK time (handles BST/GMT automatically).
 - **Manual trigger** — run from the GitHub Actions UI with an optional `force_reset` to start a fresh round.
+- **Discord slash commands** *(optional)* — a small Vercel-hosted interactions endpoint gives mods `/guesschat preview`, `/guesschat marker`, `/guesschat run` and `/guesschat status` without leaving Discord. See [Slash Commands (Vercel)](#slash-commands-vercel).
 - **Fun facts generation** *(optional)* — uses Google Gemini to generate 3–5 fun bullet points about submission commonalities, outliers, and patterns. Inserted into the `{{FUNFACTS}}` placeholder on the title slide. Enabled by setting the `GEMINI_API_KEY` environment variable; disabled (placeholder cleared) when the key is absent.
 - **Automatic GitHub issue creation** *(optional)* — when an unhandled exception occurs during a bot run, a GitHub issue is automatically created with the traceback, bot mode, and timestamp. Duplicate issues are detected and skipped. Enabled by setting `GITHUB_TOKEN` and `GITHUB_REPOSITORY` environment variables (both are automatically available in GitHub Actions).
 
@@ -86,7 +89,7 @@ When a mod updates the submissions channel description to `Current Guess Chat: <
 5. Generate a refresh token by running an OAuth flow (e.g. using `google-auth-oauthlib`'s `InstalledAppFlow`) with the scopes `https://www.googleapis.com/auth/presentations` and `https://www.googleapis.com/auth/drive`. Save the resulting token JSON (containing `client_id`, `client_secret`, `refresh_token`, and `token_uri`) as `oauth_token.json`.
 6. Create a folder in Google Drive to store the generated decks. Note the folder ID from the URL (`DRIVE_FOLDER_ID`).
 
-> **Note:** OAuth2 refresh tokens for apps in "Testing" mode expire after 7 days. To prevent expiry the scheduled workflow includes a Monday preview run that refreshes the token automatically (Thursday → Monday = 4 days, Monday → Thursday = 3 days). If you still see `RefreshError: Token has been expired or revoked`, re-run the OAuth flow and update the `GOOGLE_OAUTH_TOKEN` secret.
+> **Note:** Publish the OAuth consent screen (**In production**, not **Testing**). Refresh tokens for apps left in "Testing" expire after 7 days; published apps issue tokens that do not expire on a timer. If you see `RefreshError: Token has been expired or revoked`, check the consent screen is still published, then re-run the OAuth flow and update the `GOOGLE_OAUTH_TOKEN` secret.
 
 ### Gemini API Key *(optional — for fun facts generation)*
 
@@ -146,6 +149,7 @@ The following environment variables are set automatically by the workflow or hav
 | Variable | Default | Description |
 |---|---|---|
 | `BOT_MODE` | `slides` | `slides` to generate decks, `announce` to post the GUESS CHAT marker and mod confirmation |
+| `MARKER_MESSAGE_ID` | *(empty)* | Message ID to use as the round's `GUESS CHAT` announcement instead of the bot's own — see [Announcement Override](#announcement-override) |
 | `MOD_ROLE_NAME` | `Mod` | Discord role name used to identify moderators |
 | `GITHUB_TOKEN` | *(set by Actions)* | GitHub token — enables automatic issue creation on unhandled errors |
 | `GITHUB_REPOSITORY` | *(set by Actions)* | Repository in `owner/repo` format — used with `GITHUB_TOKEN` for issue creation |
@@ -156,7 +160,7 @@ The following environment variables are set automatically by the workflow or hav
 
 ### Automatic (Scheduled)
 
-The workflow runs every **Friday at 11:30 AM UK time** (slides mode) and again at **6:00 PM UK time** (announce mode). Preview runs on **Monday and Thursday at 9:00 PM UK time** send results to the mod channel — the Monday run also keeps the OAuth refresh token alive (tokens in "Testing" mode expire after 7 days). Two cron expressions per mode handle the clocks-change:
+The workflow runs every **Friday at 11:30 AM UK time** (slides mode) and again at **6:00 PM UK time** (announce mode). Preview runs on **Monday and Thursday at 9:00 PM UK time** send results to the mod channel. Two cron expressions per mode handle the clocks-change:
 
 - `30 10 * * 5` — 10:30 UTC = 11:30 BST (slides, summer)
 - `30 11 * * 5` — 11:30 UTC = 11:30 GMT (slides, winter)
@@ -178,6 +182,11 @@ At the start of each run the workflow reads the current UK time and sets the app
 2. Click **Run workflow**.
 3. The default mode is **preview**, which sends results to the mod channel for testing.
 4. Set `force_reset` to `true` to wipe saved state and create brand-new decks even if the marker hasn't changed.
+5. Set `marker_message_id` to adopt an announcement someone else posted — see [Announcement Override](#announcement-override).
+
+### On Demand (Discord)
+
+With the optional [slash commands](#slash-commands-vercel) deployed, mods can run `/guesschat preview` in Discord instead of opening the Actions UI.
 
 ### Running Locally
 
@@ -213,9 +222,12 @@ The workflow:
   "named_pres_id": "abc123...",
   "anon_pres_id":  "xyz789...",
   "processed_ids": ["111", "222", "333"],
-  "last_announced_topic": "DnD Characters"
+  "last_announced_topic": "DnD Characters",
+  "marker_override_id": "9876543210987654321"
 }
 ```
+
+`marker_override_id` is only present when an [announcement override](#announcement-override) is in effect.
 
 To reset state manually, delete or empty `state.json` on the `state` branch, or trigger the workflow with `force_reset = true`.
 
@@ -225,10 +237,103 @@ To reset state manually, delete or empty `state.json` on the `state` branch, or 
 
 | Scenario | Behaviour |
 |---|---|
+| `MARKER_MESSAGE_ID` set (or saved in state) | That message is the marker; no history scan |
 | New `GUESS CHAT` marker (different ID) | Creates fresh decks, resets processed IDs |
 | Same marker + new `SUBMISSION` messages | Appends new slides to existing decks |
 | Same marker + no new submissions | Exits early, nothing posted (in **preview** mode the existing deck links are still posted to the mod channel) |
 | No `GUESS CHAT` marker found | Exits early, nothing posted |
+
+---
+
+## Slash Commands (Vercel)
+
+An optional HTTP interactions endpoint in [`vercel/`](vercel/) lets mods drive the bot from Discord instead of the GitHub Actions UI.
+
+### How it fits together
+
+```
+/guesschat preview
+        │
+        ▼
+Discord ──signed POST──▶ Vercel function ──workflow_dispatch──▶ GitHub Actions
+        ◀── "▶️ Started …" ──┘                                        │
+        ◀────────────── results message ──────────────────────────────┘
+```
+
+Discord requires a reply within **3 seconds** and a deck build takes minutes, so the function does no work of its own: it verifies the request, triggers the workflow, and confirms. The workflow posts the results exactly as it does for a scheduled run.
+
+**This does not make the bot a gateway bot.** It cannot react to messages as they are posted, and round detection still happens when the workflow runs. Only a persistently-connected host can do that.
+
+### Commands
+
+| Command | Effect |
+|---|---|
+| `/guesschat preview` | Rebuild the decks and post to the mod channel |
+| `/guesschat marker message_id:<id> [mode]` | Adopt an announcement someone else posted — see [Announcement Override](#announcement-override) |
+| `/guesschat run mode:<mode> [marker_message_id] [force_reset]` | Full control over every workflow input |
+| `/guesschat status` | Current round, marker, processed count and deck links (private reply) |
+
+Access is restricted two ways: the command is registered with `default_member_permissions` = `MANAGE_GUILD` so Discord hides it from non-mods, and the endpoint independently re-checks the guild ID and (optionally) a mod role ID, because the URL is public.
+
+### Setup
+
+1. **Deploy.** Create a Vercel project from this repo and set **Root Directory** to `vercel`. This matters — it keeps the function's dependencies (just PyNaCl) separate from the bot's, so cold starts stay fast.
+
+2. **Create a GitHub token** — a fine-grained PAT scoped to this repository with **Actions: read and write** (to trigger the workflow) and **Contents: read** (so `/guesschat status` can read `state.json` from the `state` branch).
+
+3. **Set the Vercel environment variables:**
+
+   | Variable | Description |
+   |---|---|
+   | `DISCORD_PUBLIC_KEY` | Developer Portal → General Information → Public Key |
+   | `DISCORD_GUILD_ID` | Your server's ID — commands from anywhere else are refused |
+   | `DISCORD_MOD_ROLE_ID` | *(optional)* Role ID the invoker must hold |
+   | `GH_DISPATCH_TOKEN` | The PAT from step 2 |
+   | `GITHUB_REPOSITORY` | `owner/repo` |
+   | `GITHUB_WORKFLOW_FILE` | *(optional)* Defaults to `weekly-slides.yml` |
+   | `GITHUB_REF` | *(optional)* Branch to run from, defaults to `main` |
+
+4. **Point Discord at it.** Developer Portal → General Information → **Interactions Endpoint URL** → `https://<your-project>.vercel.app/api/interactions`. Discord sends a signed PING and several deliberately-invalid probes when you save; the endpoint answers `200`/`401` accordingly. Saving fails if any env var is wrong.
+
+5. **Register the commands** (once, and again whenever they change):
+
+   ```bash
+   cd vercel
+   export DISCORD_APPLICATION_ID=...   # Developer Portal → General Information
+   export DISCORD_TOKEN=...            # the bot token
+   export DISCORD_GUILD_ID=...
+   python register_commands.py         # --clear removes them again
+   ```
+
+   These are guild commands, so they appear immediately rather than taking up to an hour to propagate.
+
+`GET /api/interactions` returns `{"status": "ok"}` for uptime monitoring.
+
+### Cost
+
+Vercel's Hobby plan is free for non-commercial use, and this endpoint is a handful of invocations per week. The heavy lifting stays on GitHub Actions, so nothing here approaches a paid tier.
+
+---
+
+## Announcement Override
+
+Sometimes a round gets announced by a person rather than by the bot. Pointing the bot at that message keeps the round working without a duplicate announcement.
+
+1. Enable **Developer Mode** in Discord, right-click the announcement message and **Copy Message ID**.
+2. Go to **Actions → Weekly Slides → Run workflow** and paste the ID into **`marker_message_id`**. (Locally, set `MARKER_MESSAGE_ID` in `.env`.)
+
+What each mode does with it:
+
+| Mode | Behaviour |
+|---|---|
+| `announce` / `test_announce` | Posts **no** announcement. Adopts the given message, records its topic as `last_announced_topic`, and tells the mod channel which message it adopted. |
+| `slides` / `preview` / `test_slides` | Skips the history scan and builds the decks from the given message, collecting every `SUBMISSION` posted after it. |
+
+Notes:
+
+- The override is saved to state as `marker_override_id`, so the rest of the round's scheduled runs keep using it without re-entering the ID. It is cleared automatically the next time the bot posts its own announcement (or by `force_reset`).
+- The message does not have to be worded like the bot's announcement. When it does not start with `GUESS CHAT`, the topic is taken from the `Current Guess Chat: <topic>` channel description instead.
+- The message must live in the submissions channel (`DISCORD_CHANNEL_ID`). If it cannot be fetched, `announce` mode does nothing and the slides modes log a warning and fall back to the normal history scan.
 
 ---
 
@@ -240,12 +345,14 @@ To reset state manually, delete or empty `state.json` on the `state` branch, or 
 **Questions (anonymous):** https://docs.google.com/presentation/d/.../edit?usp=sharing
 **Answers:** https://docs.google.com/presentation/d/.../edit?usp=sharing
 
-**Submissions (5 total, 4 unique submitters):**
+**Submissions (4):**
   • Alice
-  • Bob (×2)
+  • Bob
   • Charlie
   • Diana
 ```
+
+The count and the names are the union of the Discord submitters and the names read off the **named** deck, so slides added by hand are included.
 
 ---
 
@@ -286,11 +393,11 @@ Running on GitHub Actions free tier: **$0/month**. Each run takes under a minute
 Run the test suite with:
 
 ```bash
-pip install -r requirements.txt pytest pytest-asyncio
+pip install -r requirements.txt -r vercel/requirements.txt pytest pytest-asyncio
 pytest tests/
 ```
 
-Tests use `unittest.mock` (`MagicMock`, `AsyncMock`, `patch`) to mock all Discord and Google API calls — no real credentials are needed.
+Tests use `unittest.mock` (`MagicMock`, `AsyncMock`, `patch`) to mock all Discord, Google and GitHub API calls — no real credentials are needed. `vercel/requirements.txt` is needed for `test_interactions.py`, which signs real Ed25519 payloads to exercise the signature check.
 
 ---
 
@@ -306,7 +413,7 @@ Tests use `unittest.mock` (`MagicMock`, `AsyncMock`, `patch`) to mock all Discor
 | Double-run on DST change | The DST guard handles this; check the workflow logs for "skipping this scheduled run" |
 | Bot skipped due to runner delay | The slides guard tolerates up to 30 min of GitHub Actions delay (accepts UK 12:00–12:29); if a run was still skipped, trigger it manually via **Actions → Run workflow** |
 | State branch missing | It is created automatically on the first successful run |
-| `RefreshError: Token has been expired or revoked` | Your Google OAuth token needs refreshing — re-run the OAuth consent flow and update the `GOOGLE_OAUTH_TOKEN` secret. The Monday and Thursday preview runs keep the token alive automatically; if it still expires, check that the scheduled workflow is running. When `GITHUB_TOKEN` and `GITHUB_REPOSITORY` are set, the bot automatically creates a GitHub issue for this error |
+| `RefreshError: Token has been expired or revoked` | Check the OAuth consent screen is still **In production** (tokens for apps in "Testing" expire after 7 days), then re-run the OAuth consent flow and update the `GOOGLE_OAUTH_TOKEN` secret. When `GITHUB_TOKEN` and `GITHUB_REPOSITORY` are set, the bot automatically creates a GitHub issue for this error |
 
 ---
 
@@ -332,16 +439,25 @@ guess-chat-bot/
 ├── requirements.txt                    # Python dependencies
 ├── tests/                              # pytest test suite
 │   ├── test_cleanup.py
+│   ├── test_deck_authors.py
 │   ├── test_display_name.py
 │   ├── test_error_notifications.py
 │   ├── test_execute_retry.py
 │   ├── test_hyperlinks.py
 │   ├── test_image_handling.py
 │   ├── test_image_insert_error.py
+│   ├── test_interactions.py
 │   ├── test_markdown_detection.py
+│   ├── test_marker_override.py
 │   ├── test_mod_channel.py
 │   ├── test_rate_limit.py
 │   ├── test_thread_offload.py
 │   └── test_youtube.py
+├── vercel/                             # Discord slash-command front end (optional)
+│   ├── api/
+│   │   └── interactions.py             # HTTP interactions endpoint
+│   ├── register_commands.py            # One-off slash command registration
+│   ├── requirements.txt                # PyNaCl only — kept apart from the bot's deps
+│   └── vercel.json
 └── weekly_slides_bot.py                # Main bot script
 ```

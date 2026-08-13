@@ -58,6 +58,12 @@ TEMPLATE_DECK_ID = os.environ["TEMPLATE_DECK_ID"]
 GEMINI_API_KEY: str | None = os.environ.get("GEMINI_API_KEY")
 GITHUB_TOKEN: str | None = os.environ.get("GITHUB_TOKEN")
 GITHUB_REPOSITORY: str | None = os.environ.get("GITHUB_REPOSITORY")
+# Manual override for the GUESS CHAT marker message.  Set this when the round
+# was announced by a person rather than the bot: the bot then treats that
+# message as the round marker instead of scanning the channel history, and
+# skips posting its own announcement.  Persisted to state so that subsequent
+# scheduled runs in the same round keep using it.
+MARKER_MESSAGE_ID: str | None = (os.environ.get("MARKER_MESSAGE_ID") or "").strip() or None
 
 MARKER_PREFIX = "GUESS CHAT"
 SUBMISSION_PREFIX = "SUBMISSION"
@@ -1515,13 +1521,69 @@ def append_slides(
 # ---------------------------------------------------------------------------
 
 
+_ANSWER_PREFIX = "Answer:"
+
+
+def collect_deck_authors(slides_svc, pres_id: str) -> list[str]:
+    """Return the author names written on the submission slides of a named deck.
+
+    Slides added by hand (mod-added extras, submissions relayed from outside
+    the channel) never pass through the Discord scan, so the results message
+    would otherwise omit them.  Reading the names back off the named deck
+    picks them up regardless of how the slide got there.
+
+    The first slide (title) and last slide (end) are skipped; every submission
+    slide carries an author box reading ``Answer: <name>``.  Slides whose
+    author box is missing or empty — including the anonymous deck, where it
+    reads just ``Answer:`` — contribute nothing.
+    """
+    pres = execute_with_retry(
+        slides_svc.presentations().get(presentationId=pres_id)
+    )
+    slides = pres.get("slides", [])
+    names: list[str] = []
+    for slide in slides[1:-1]:
+        author_elem = _find_author_element(slide.get("pageElements", []))
+        if author_elem is None:
+            continue
+        text = _get_shape_text(author_elem).strip()
+        if not text.startswith(_ANSWER_PREFIX):
+            continue
+        name = text[len(_ANSWER_PREFIX):].strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+async def read_deck_authors(slides_svc, named_pres_id: str) -> list[str]:
+    """Read author names off the named deck, tolerating API failures.
+
+    The name list is a nicety on top of the deck links, so a failed Slides
+    read must not stop the results message from going out.
+    """
+    try:
+        return await asyncio.to_thread(collect_deck_authors, slides_svc, named_pres_id)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[warn] Could not read author names from the deck: {str(exc) or repr(exc)}")
+        return []
+
+
 def format_results_message(
     topic: str,
     submissions: list[dict],
     named_url: str,
     anon_url: str,
+    deck_authors: list[str] | None = None,
 ) -> str:
-    sorted_names = sorted({sub["author"] for sub in submissions}, key=str.lower)
+    """Build the Discord results message.
+
+    ``deck_authors`` are names read back off the named deck (see
+    :func:`collect_deck_authors`) so that manually added slides are listed
+    alongside the submissions parsed from Discord.
+    """
+    names = {sub["author"] for sub in submissions}
+    names.update(deck_authors or [])
+    sorted_names = sorted(names, key=str.lower)
     name_lines = [f"  • {name}" for name in sorted_names]
 
     lines = [
@@ -1530,7 +1592,7 @@ def format_results_message(
         f"**Questions (anonymous):** {anon_url}",
         f"**Answers:** {named_url}",
         "",
-        f"**Submissions ({len(submissions)}):**",
+        f"**Submissions ({len(sorted_names)}):**",
     ]
     lines.extend(name_lines)
     return "\n".join(lines)
@@ -1564,6 +1626,60 @@ def format_error_message(
 # ---------------------------------------------------------------------------
 
 
+async def resolve_marker_message(
+    channel,
+    bot_user_id: int | None,
+    override_id: str | None = None,
+) -> "discord.Message | None":
+    """Return the GUESS CHAT message that marks the start of the current round.
+
+    When ``override_id`` is given that message is used directly, which lets a
+    round announced by a person — in whatever wording they chose — drive the
+    decks.  A message that cannot be fetched is reported and ignored, falling
+    back to the normal scan rather than skipping the run.
+
+    Otherwise the channel history is scanned for the most recent marker,
+    preferring one posted by the bot itself and falling back to any author's
+    so that legacy mod-posted markers keep working.
+    """
+    if override_id:
+        try:
+            msg = await channel.fetch_message(int(override_id))
+        except (discord.HTTPException, ValueError) as exc:
+            print(f"[warn] Could not fetch marker override message {override_id}: {exc}")
+        else:
+            print(f"[info] Using marker override message {override_id}.")
+            return msg
+
+    fallback_marker_msg = None
+    async for msg in channel.history(limit=500):
+        first_line = msg.content.split("\n", 1)[0]
+        if _MARKER_LINE_RE.match(first_line):
+            if bot_user_id is not None and msg.author.id == bot_user_id:
+                return msg
+            if fallback_marker_msg is None:
+                fallback_marker_msg = msg
+
+    if fallback_marker_msg is not None:
+        print("[info] Using non-bot GUESS CHAT marker as fallback.")
+    return fallback_marker_msg
+
+
+def marker_topic(marker_msg, channel) -> str:
+    """Return the round topic for a marker message.
+
+    An overridden marker was written by a person and need not be worded like
+    the bot's own announcement, so when the message does not parse as a
+    ``GUESS CHAT`` marker the mod-set channel description is preferred.
+    """
+    first_line = marker_msg.content.split("\n", 1)[0]
+    if _MARKER_LINE_RE.match(first_line):
+        return extract_topic(marker_msg.content)
+    return parse_channel_topic(getattr(channel, "topic", None)) or extract_topic(
+        marker_msg.content
+    )
+
+
 async def generate_slides(client: discord.Client) -> None:
     state = load_state()
 
@@ -1573,32 +1689,19 @@ async def generate_slides(client: discord.Client) -> None:
         print(f"[error] Could not find channel {DISCORD_CHANNEL_ID}")
         return
 
-    # --- Find the most recent GUESS CHAT marker ---
-    # Prefer a marker posted by the bot itself.  Fall back to *any* GUESS CHAT
-    # marker so that legacy mod-posted markers still work this week.
-    # TODO: remove the legacy fallback once the bot has posted its own marker.
-    marker_msg = None
-    fallback_marker_msg = None
+    # --- Find the GUESS CHAT marker for this round ---
+    # An explicit override (env var this run, or one saved by a previous run)
+    # wins; otherwise scan the channel history.
+    marker_override = MARKER_MESSAGE_ID or state.get("marker_override_id")
     bot_user_id = client.user.id if client.user else None
-    async for msg in channel.history(limit=500):
-        first_line = msg.content.split("\n", 1)[0]
-        if _MARKER_LINE_RE.match(first_line):
-            if bot_user_id is not None and msg.author.id == bot_user_id:
-                marker_msg = msg
-                break
-            if fallback_marker_msg is None:
-                fallback_marker_msg = msg
-
-    if marker_msg is None and fallback_marker_msg is not None:
-        marker_msg = fallback_marker_msg
-        print("[info] Using non-bot GUESS CHAT marker as fallback.")
+    marker_msg = await resolve_marker_message(channel, bot_user_id, marker_override)
 
     if marker_msg is None:
         print("[info] No GUESS CHAT marker found; nothing to do.")
         return
 
     marker_id = str(marker_msg.id)
-    topic = extract_topic(marker_msg.content)
+    topic = marker_topic(marker_msg, channel)
 
     # --- Collect SUBMISSION messages and conversation after the marker ---
     all_submissions: list[dict] = []
@@ -1665,7 +1768,13 @@ async def generate_slides(client: discord.Client) -> None:
                 if post_channel is not None:
                     named_url = presentation_url(named_pres_id)
                     anon_url = presentation_url(anon_pres_id)
-                    msg_text = format_results_message(post_topic, [], named_url, anon_url)
+                    # Every name in this re-post comes off the deck itself,
+                    # including any slides added by hand since the last run.
+                    slides_svc, _ = await asyncio.to_thread(get_google_services)
+                    deck_authors = await read_deck_authors(slides_svc, named_pres_id)
+                    msg_text = format_results_message(
+                        post_topic, [], named_url, anon_url, deck_authors,
+                    )
                     await post_channel.send(msg_text)
                     print("[info] Posted results to channel.")
             return
@@ -1788,7 +1897,12 @@ async def generate_slides(client: discord.Client) -> None:
     if post_channel is not None:
         named_url = presentation_url(named_pres_id)
         anon_url = presentation_url(anon_pres_id)
-        msg_text = format_results_message(topic, all_submissions, named_url, anon_url)
+        # Read the names back off the named deck so that slides added by hand
+        # since the last run are listed alongside the Discord submissions.
+        deck_authors = await read_deck_authors(slides_svc, named_pres_id)
+        msg_text = format_results_message(
+            topic, all_submissions, named_url, anon_url, deck_authors,
+        )
         await post_channel.send(msg_text)
         print("[info] Posted results message.")
 
@@ -1833,6 +1947,11 @@ async def generate_slides(client: discord.Client) -> None:
         "anon_pres_id": anon_pres_id,
         "processed_ids": list(processed_ids),
     })
+    if MARKER_MESSAGE_ID:
+        # Remember the override so the rest of the round's scheduled runs use
+        # the same marker without needing the env var set again.  Cleared when
+        # the bot posts its own announcement for the next round.
+        prev_state["marker_override_id"] = MARKER_MESSAGE_ID
     state = prev_state
     await asyncio.to_thread(save_state, state)
     print("[info] State saved.")
@@ -1843,6 +1962,57 @@ async def generate_slides(client: discord.Client) -> None:
 # ---------------------------------------------------------------------------
 
 
+async def adopt_manual_announcement(client: discord.Client, submissions_channel) -> None:
+    """Record a human-posted message as this round's GUESS CHAT announcement.
+
+    Used when ``MARKER_MESSAGE_ID`` is set, i.e. someone announced the round
+    themselves.  The bot posts nothing, saves the message ID so that the
+    slides run builds the decks from it, and tells the mod channel which
+    message it adopted.
+    """
+    try:
+        marker_msg = await submissions_channel.fetch_message(int(MARKER_MESSAGE_ID))
+    except (discord.HTTPException, ValueError) as exc:
+        print(f"[error] Could not fetch marker override message {MARKER_MESSAGE_ID}: {exc}")
+        return
+
+    topic = marker_topic(marker_msg, submissions_channel)
+    print(f"[info] Adopting message {MARKER_MESSAGE_ID} as the announcement for '{topic}'.")
+
+    if BOT_MODE == "test_announce":
+        confirm_channel_id = DISCORD_TEST_CHANNEL_ID
+    else:
+        confirm_channel_id = DISCORD_MOD_CHANNEL_ID
+    if confirm_channel_id is not None:
+        confirm_channel = client.get_channel(confirm_channel_id)
+        if confirm_channel is not None:
+            guild = getattr(submissions_channel, "guild", None)
+            mod_mention = _resolve_mod_mention(guild)
+            lines = [
+                f"{mod_mention} Using the existing announcement for **{topic}** "
+                f"— I won't post my own.",
+                "Are there any extras we should add?",
+            ]
+            guild_id = guild.id if guild is not None else None
+            if guild_id is not None:
+                lines.append(
+                    discord_message_url(guild_id, DISCORD_CHANNEL_ID, str(marker_msg.id))
+                )
+            await confirm_channel.send("\n".join(lines))
+            print("[info] Sent confirmation.")
+        else:
+            print(f"[warn] Could not find channel {confirm_channel_id}")
+
+    if BOT_MODE == "test_announce":
+        print("[info] test_announce mode — skipping state persistence.")
+        return
+    state = load_state()
+    state["last_announced_topic"] = topic
+    state["marker_override_id"] = MARKER_MESSAGE_ID
+    await asyncio.to_thread(save_state, state)
+    print("[info] State saved (manual announcement adopted).")
+
+
 async def check_mod_and_announce(client: discord.Client) -> None:
     """Read the submissions channel description for a new Guess Chat topic and post the announcement.
 
@@ -1851,11 +2021,18 @@ async def check_mod_and_announce(client: discord.Client) -> None:
     announced topic (stored in state), the bot posts a ``GUESS CHAT <topic>``
     message in the submissions channel.  If the topic is unchanged, a reminder
     is sent to the mod channel.
+
+    Setting ``MARKER_MESSAGE_ID`` short-circuits all of this: the round was
+    announced by someone else, so that message is adopted instead.
     """
     # --- Read the submissions channel description ---
     submissions_channel = client.get_channel(DISCORD_CHANNEL_ID)
     if submissions_channel is None:
         print(f"[error] Could not find submissions channel {DISCORD_CHANNEL_ID}")
+        return
+
+    if MARKER_MESSAGE_ID:
+        await adopt_manual_announcement(client, submissions_channel)
         return
 
     description = getattr(submissions_channel, "topic", "") or ""
@@ -1939,6 +2116,9 @@ async def check_mod_and_announce(client: discord.Client) -> None:
         print("[info] test_announce mode — skipping state persistence.")
         return
     state["last_announced_topic"] = topic
+    # The bot has announced this round itself, so any override saved for the
+    # previous round no longer applies.
+    state.pop("marker_override_id", None)
     await asyncio.to_thread(save_state, state)
     print("[info] State saved (announcement tracked).")
 

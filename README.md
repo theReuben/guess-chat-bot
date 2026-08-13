@@ -36,7 +36,7 @@ When a mod updates the submissions channel description to `Current Guess Chat: <
 - **API retry with backoff** — transient Google API errors (429, 500, 503) are retried with exponential backoff.
 - **Scheduled runs** — GitHub Actions triggers every Friday at 11:30 AM UK time (handles BST/GMT automatically).
 - **Manual trigger** — run from the GitHub Actions UI with an optional `force_reset` to start a fresh round.
-- **Discord slash commands** *(optional)* — a small Vercel-hosted interactions endpoint gives mods `/guesschat preview`, `/guesschat marker`, `/guesschat run` and `/guesschat status` without leaving Discord. See [Slash Commands (Vercel)](#slash-commands-vercel).
+- **Discord slash commands** *(optional)* — a small Vercel-hosted interactions endpoint gives mods `/guesschat preview`, `announce`, `time`, `marker`, `run` and `status` without leaving Discord. See [Slash Commands (Vercel)](#slash-commands-vercel).
 - **Fun facts generation** *(optional)* — uses Google Gemini to generate 3–5 fun bullet points about submission commonalities, outliers, and patterns. Inserted into the `{{FUNFACTS}}` placeholder on the title slide. Enabled by setting the `GEMINI_API_KEY` environment variable; disabled (placeholder cleared) when the key is absent.
 - **Automatic GitHub issue creation** *(optional)* — when an unhandled exception occurs during a bot run, a GitHub issue is automatically created with the traceback, bot mode, and timestamp. Duplicate issues are detected and skipped. Enabled by setting `GITHUB_TOKEN` and `GITHUB_REPOSITORY` environment variables (both are automatically available in GitHub Actions).
 
@@ -139,6 +139,7 @@ Add the following secrets to your repository (**Settings → Secrets and variabl
 | `DISCORD_CHANNEL_ID` | Submissions channel ID |
 | `DISCORD_RESULTS_CHANNEL_ID` | Results channel ID |
 | `DISCORD_MOD_CHANNEL_ID` | *(optional)* Mod channel ID — used for confirmations, reminders, and error notifications |
+| `DISCORD_STRIM_CHANNEL_ID` | *(optional)* Stream channel ID — where `strim` mode posts the decks |
 | `DRIVE_FOLDER_ID` | Google Drive folder ID for generated decks |
 | `TEMPLATE_DECK_ID` | Google Slides template presentation ID |
 | `GOOGLE_OAUTH_TOKEN` | OAuth2 token JSON with `client_id`, `client_secret`, `refresh_token`, and `token_uri` |
@@ -148,7 +149,7 @@ The following environment variables are set automatically by the workflow or hav
 
 | Variable | Default | Description |
 |---|---|---|
-| `BOT_MODE` | `slides` | `slides` to generate decks, `announce` to post the GUESS CHAT marker and mod confirmation |
+| `BOT_MODE` | `slides` | `slides` to generate decks, `announce` to post the GUESS CHAT marker and mod confirmation, `strim` to generate decks and post them to the stream channel |
 | `MARKER_MESSAGE_ID` | *(empty)* | Message ID to use as the round's `GUESS CHAT` announcement instead of the bot's own — see [Announcement Override](#announcement-override) |
 | `MOD_ROLE_NAME` | `Mod` | Discord role name used to identify moderators |
 | `GITHUB_TOKEN` | *(set by Actions)* | GitHub token — enables automatic issue creation on unhandled errors |
@@ -270,6 +271,7 @@ Discord requires a reply within **3 seconds** and a deck build takes minutes, so
 |---|---|
 | `/guesschat preview` | Rebuild the decks and post to the mod channel |
 | `/guesschat announce` | Post the `GUESS CHAT` announcement to the submissions channel (pings `@everyone`) |
+| `/guesschat time` | Guess chat time — generate the slides and post them to the stream channel |
 | `/guesschat marker message_id:<id> [mode]` | Adopt an announcement someone else posted — see [Announcement Override](#announcement-override) |
 | `/guesschat run mode:<mode> [marker_message_id] [force_reset]` | Full control over every workflow input |
 | `/guesschat status` | Current round, marker, processed count and deck links (private reply) |
@@ -452,6 +454,7 @@ guess-chat-bot/
 │   ├── test_marker_override.py
 │   ├── test_mod_channel.py
 │   ├── test_rate_limit.py
+│   ├── test_strim_mode.py
 │   ├── test_thread_offload.py
 │   └── test_youtube.py
 ├── vercel/                             # Discord slash-command front end (optional)

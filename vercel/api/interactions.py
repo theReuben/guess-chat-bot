@@ -49,7 +49,12 @@ CHANNEL_MESSAGE_WITH_SOURCE = 4
 EPHEMERAL = 1 << 6
 
 # Bot modes accepted by the workflow's bot_mode input.
-VALID_MODES = ("preview", "slides", "announce", "test_slides", "test_announce")
+VALID_MODES = (
+    "preview", "slides", "announce", "test_slides", "test_announce", "strim",
+)
+
+# Subcommands that are just a named shortcut for one mode.
+MODE_SHORTCUTS = {"preview": "preview", "announce": "announce", "time": "strim"}
 
 # Discord's deadline is 3 seconds; leave room for TLS setup and a cold start.
 _GITHUB_TIMEOUT_S = 2.5
@@ -178,6 +183,8 @@ def _started_message(inputs: dict[str, str]) -> str:
         )
     if mode == "announce":
         lines.append("📣 This posts the announcement to the submissions channel.")
+    if mode == "strim":
+        lines.append("📺 Slides will be posted to the stream channel.")
     if inputs.get("force_reset") == "true":
         lines.append("⚠️ State wiped — brand-new decks will be created.")
     lines.append(f"Results will be posted when it finishes · <{_workflow_url()}>")
@@ -196,9 +203,8 @@ def build_inputs(name: str, options: dict) -> tuple[dict[str, str] | None, str |
     Returns ``(inputs, None)`` on success or ``(None, reason)`` when the
     options don't make sense.
     """
-    # Shortcut subcommands whose name is simply the mode they run.
-    if name in ("preview", "announce"):
-        return {"bot_mode": name}, None
+    if name in MODE_SHORTCUTS:
+        return {"bot_mode": MODE_SHORTCUTS[name]}, None
 
     if name == "marker":
         message_id = str(options.get("message_id") or "").strip()

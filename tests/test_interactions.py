@@ -135,9 +135,15 @@ def test_dm_invocation_is_refused_when_a_role_is_required():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("name", ["preview", "announce"])
-def test_shortcut_subcommands_map_to_the_mode_they_are_named_after(name):
-    assert interactions.build_inputs(name, {}) == ({"bot_mode": name}, None)
+@pytest.mark.parametrize(
+    "name,mode", [("preview", "preview"), ("announce", "announce"), ("time", "strim")]
+)
+def test_shortcut_subcommands_map_to_their_mode(name, mode):
+    assert interactions.build_inputs(name, {}) == ({"bot_mode": mode}, None)
+
+
+def test_every_shortcut_target_is_a_mode_the_workflow_accepts():
+    assert set(interactions.MODE_SHORTCUTS.values()) <= set(interactions.VALID_MODES)
 
 
 def test_marker_defaults_to_preview_mode():
@@ -267,6 +273,14 @@ def test_announce_dispatches_and_warns_that_it_posts_publicly(allowed):
 
     dispatch.assert_called_once_with({"bot_mode": "announce"})
     assert "submissions channel" in reply["data"]["content"]
+
+
+def test_time_dispatches_strim_mode_and_names_the_destination(allowed):
+    with patch.object(interactions, "dispatch_workflow") as dispatch:
+        reply = interactions.handle_command(_command("time"))
+
+    dispatch.assert_called_once_with({"bot_mode": "strim"})
+    assert "stream channel" in reply["data"]["content"]
 
 
 def test_only_announce_carries_the_public_post_warning(allowed):

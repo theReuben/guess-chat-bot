@@ -34,6 +34,10 @@ BOOLEAN = 5
 # client-side affordance.
 MANAGE_GUILD = "32"
 
+# Discord's edge rejects urllib's default "Python-urllib/x.y" agent with a 403,
+# so every request has to identify itself the way the API docs require.
+USER_AGENT = "DiscordBot (https://github.com/theReuben/guess-chat-bot, 1.0)"
+
 MODES = ("preview", "slides", "announce", "test_slides", "test_announce")
 _MODE_CHOICES = [{"name": mode, "value": mode} for mode in MODES]
 
@@ -110,6 +114,7 @@ def put_commands(commands: list[dict]) -> list[dict]:
     req = urllib.request.Request(url, data=json.dumps(commands).encode(), method="PUT")
     req.add_header("Authorization", f"Bot {BOT_TOKEN}")
     req.add_header("Content-Type", "application/json")
+    req.add_header("User-Agent", USER_AGENT)
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             return json.loads(resp.read())

@@ -54,6 +54,11 @@ COMMANDS = [
             },
             {
                 "type": SUB_COMMAND,
+                "name": "announce",
+                "description": "Post the GUESS CHAT announcement to the submissions channel (@everyone)",
+            },
+            {
+                "type": SUB_COMMAND,
                 "name": "marker",
                 "description": "Use an announcement someone else posted as this round's marker",
                 "options": [

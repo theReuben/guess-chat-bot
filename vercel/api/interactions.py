@@ -170,11 +170,14 @@ def _workflow_url() -> str:
 
 
 def _started_message(inputs: dict[str, str]) -> str:
-    lines = [f"▶️ Started a **{inputs['bot_mode']}** run."]
+    mode = inputs["bot_mode"]
+    lines = [f"▶️ Started the bot in **{mode}** mode."]
     if inputs.get("marker_message_id"):
         lines.append(
             f"Using message `{inputs['marker_message_id']}` as the announcement."
         )
+    if mode == "announce":
+        lines.append("📣 This posts the announcement to the submissions channel.")
     if inputs.get("force_reset") == "true":
         lines.append("⚠️ State wiped — brand-new decks will be created.")
     lines.append(f"Results will be posted when it finishes · <{_workflow_url()}>")
@@ -193,8 +196,9 @@ def build_inputs(name: str, options: dict) -> tuple[dict[str, str] | None, str |
     Returns ``(inputs, None)`` on success or ``(None, reason)`` when the
     options don't make sense.
     """
-    if name == "preview":
-        return {"bot_mode": "preview"}, None
+    # Shortcut subcommands whose name is simply the mode they run.
+    if name in ("preview", "announce"):
+        return {"bot_mode": name}, None
 
     if name == "marker":
         message_id = str(options.get("message_id") or "").strip()

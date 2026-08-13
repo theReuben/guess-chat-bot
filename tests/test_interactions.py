@@ -372,6 +372,35 @@ def test_read_state_handles_an_empty_file():
         assert interactions.read_state() == {}
 
 
+def _sent_request(urlopen_mock):
+    return urlopen_mock.call_args.args[0]
+
+
+def test_github_requests_identify_themselves():
+    """GitHub rejects requests that send no User-Agent."""
+    with patch("urllib.request.urlopen") as urlopen:
+        urlopen.return_value.__enter__.return_value.read.return_value = b""
+        interactions._github_request("POST", "/repos/o/r/x", {"a": 1})
+
+    assert _sent_request(urlopen).get_header("User-agent")
+
+
+def test_discord_requests_use_the_required_bot_agent():
+    """Discord's edge 403s urllib's default Python-urllib agent."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "vercel"))
+    with patch.dict(
+        "os.environ",
+        {"DISCORD_APPLICATION_ID": "1", "DISCORD_TOKEN": "t", "DISCORD_GUILD_ID": "2"},
+    ):
+        import register_commands
+
+    with patch("urllib.request.urlopen") as urlopen:
+        urlopen.return_value.__enter__.return_value.read.return_value = b"[]"
+        register_commands.put_commands([])
+
+    assert _sent_request(urlopen).get_header("User-agent").startswith("DiscordBot ")
+
+
 # ---------------------------------------------------------------------------
 # The HTTP handler end to end
 # ---------------------------------------------------------------------------

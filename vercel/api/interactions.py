@@ -110,6 +110,8 @@ def _github_request(method: str, path: str, payload: dict | None = None) -> dict
     req.add_header("Accept", "application/vnd.github+json")
     req.add_header("Authorization", f"Bearer {GH_DISPATCH_TOKEN}")
     req.add_header("X-GitHub-Api-Version", "2022-11-28")
+    # GitHub requires every request to identify itself.
+    req.add_header("User-Agent", "guess-chat-bot-interactions")
     if data is not None:
         req.add_header("Content-Type", "application/json")
     with urllib.request.urlopen(req, timeout=_GITHUB_TIMEOUT_S) as resp:

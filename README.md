@@ -269,6 +269,7 @@ Discord requires a reply within **3 seconds** and a deck build takes minutes, so
 | Command | Effect |
 |---|---|
 | `/guesschat preview` | Rebuild the decks and post to the mod channel |
+| `/guesschat announce` | Post the `GUESS CHAT` announcement to the submissions channel (pings `@everyone`) |
 | `/guesschat marker message_id:<id> [mode]` | Adopt an announcement someone else posted — see [Announcement Override](#announcement-override) |
 | `/guesschat run mode:<mode> [marker_message_id] [force_reset]` | Full control over every workflow input |
 | `/guesschat status` | Current round, marker, processed count and deck links (private reply) |

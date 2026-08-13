@@ -135,8 +135,9 @@ def test_dm_invocation_is_refused_when_a_role_is_required():
 # ---------------------------------------------------------------------------
 
 
-def test_preview_maps_to_preview_mode():
-    assert interactions.build_inputs("preview", {}) == ({"bot_mode": "preview"}, None)
+@pytest.mark.parametrize("name", ["preview", "announce"])
+def test_shortcut_subcommands_map_to_the_mode_they_are_named_after(name):
+    assert interactions.build_inputs(name, {}) == ({"bot_mode": name}, None)
 
 
 def test_marker_defaults_to_preview_mode():
@@ -258,6 +259,21 @@ def test_a_command_dispatches_the_workflow_and_confirms(allowed):
     assert "preview" in reply["data"]["content"]
     # Run confirmations stay visible so the mod channel keeps a record.
     assert "flags" not in reply["data"]
+
+
+def test_announce_dispatches_and_warns_that_it_posts_publicly(allowed):
+    with patch.object(interactions, "dispatch_workflow") as dispatch:
+        reply = interactions.handle_command(_command("announce"))
+
+    dispatch.assert_called_once_with({"bot_mode": "announce"})
+    assert "submissions channel" in reply["data"]["content"]
+
+
+def test_only_announce_carries_the_public_post_warning(allowed):
+    with patch.object(interactions, "dispatch_workflow"):
+        reply = interactions.handle_command(_command("preview"))
+
+    assert "submissions channel" not in reply["data"]["content"]
 
 
 def test_force_reset_is_called_out_in_the_confirmation(allowed):

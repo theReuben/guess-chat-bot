@@ -1,17 +1,21 @@
 {
   "last_announced_topic": "YOUR 3 MAINS",
-  "marker_id": "1546898079435984988",
-  "topic": "GAME SERIES TIERLIST",
-  "named_pres_id": "1VmKUTVKZsSupeSGrovyGS3eIjMeX4tjEnZNnYc8ggRk",
-  "anon_pres_id": "1I4SuVYZBH5pJ1cf9gK-Ih3WKjBcYoZEyAj1JNqXCaZo",
+  "marker_id": "1555596340153819259",
+  "topic": "YOUR 3 MAINS",
+  "named_pres_id": "1QmGrU0vRyJaB0CtBrQy-jBIDzWJLp77JlbSq50CBiyc",
+  "anon_pres_id": "1iNuEURh0_yHy6_Uw6GWoCtnU_a2typO2_K4XDY65T2E",
   "processed_ids": [
-    "1547762757258977340",
-    "1547847857866805368",
-    "1547793908493328506",
-    "1547795393981456435",
-    "1547725876987170957",
-    "1547835591381622845",
-    "1547969199656271922",
-    "1546907324143374379"
-  ]
+    "1555606393346728036",
+    "1555601389961486427",
+    "1555600464370737273"
+  ],
+  "submitters": [
+    "amazingAkita",
+    "Super_Nerd",
+    "Vargna"
+  ],
+  "last_run": {
+    "mode": "preview",
+    "at": 1790981284
+  }
 }

@@ -13,7 +13,7 @@ os.environ.setdefault("DISCORD_CHANNEL_ID", "1")
 os.environ.setdefault("DISCORD_RESULTS_CHANNEL_ID", "2")
 os.environ.setdefault("TEMPLATE_DECK_ID", "tpl")
 
-from weekly_slides_bot import build_deck, append_slides, generate_slides, slide_url, discord_message_url, format_error_message
+from weekly_slides_bot import build_deck, append_slides, generate_slides, slide_url, discord_message_url, format_error_message, format_error_summary
 
 
 class _ClientHelper:
@@ -312,11 +312,17 @@ class TestURLHelpers:
 class TestFormatErrorMessage:
     """Tests for the format_error_message helper."""
 
-    def test_multiline_output(self):
+    def test_single_bullet_line(self):
         err = {"author": "Alice", "issue": "Upload failed", "slide_number": 3, "slide_id": "s3", "message_id": "99"}
         result = format_error_message(err, "pres1", guild_id=10, channel_id=20)
-        lines = result.split("\n")
-        assert len(lines) == 3
+        assert "\n" not in result
+        assert result.startswith("• **Alice**")
+
+    def test_links_do_not_unfurl(self):
+        err = {"author": "Alice", "issue": "Upload failed", "slide_number": 3, "slide_id": "s3", "message_id": "99"}
+        result = format_error_message(err, "pres1", guild_id=10, channel_id=20)
+        assert "](<https://docs.google.com/" in result
+        assert "](<https://discord.com/" in result
 
     def test_contains_author_and_issue(self):
         err = {"author": "Bob", "issue": "Bad image", "slide_number": 2, "slide_id": "s2", "message_id": "50"}
@@ -345,3 +351,56 @@ class TestFormatErrorMessage:
         err = {"author": "Eve", "issue": "Oops", "slide_number": 1, "slide_id": "s1", "message_id": ""}
         result = format_error_message(err, "pres1", guild_id=10, channel_id=20)
         assert "discord.com" not in result
+
+
+class TestFormatErrorSummary:
+    """All of a run's errors go out under one heading."""
+
+    @staticmethod
+    def _err(n: int) -> dict:
+        return {"author": f"User{n}", "issue": "Upload failed", "slide_number": n, "slide_id": f"s{n}", "message_id": str(n)}
+
+    def test_no_errors_means_no_messages(self):
+        assert format_error_summary([], "pres1", guild_id=10, channel_id=20) == []
+
+    def test_errors_share_one_message(self):
+        (msg,) = format_error_summary([self._err(1), self._err(2)], "pres1", guild_id=10, channel_id=20)
+        assert msg.startswith("⚠️ **2 processing issues**")
+        assert "User1" in msg and "User2" in msg
+
+    def test_singular_heading(self):
+        (msg,) = format_error_summary([self._err(1)], "pres1", guild_id=10, channel_id=20)
+        assert "**1 processing issue**" in msg
+
+    def test_splits_to_stay_under_discords_limit(self):
+        msgs = format_error_summary([self._err(n) for n in range(60)], "pres1", guild_id=10, channel_id=20)
+        assert len(msgs) > 1
+        assert all(len(m) <= 2000 for m in msgs)
+        assert sum(m.count("• **User") for m in msgs) == 60
+
+
+class TestGenerateSlidesGroupsErrors:
+    @pytest.mark.asyncio
+    @patch("weekly_slides_bot.save_state")
+    @patch("weekly_slides_bot.build_deck", return_value=[
+        {"author": "Dave", "issue": "Image upload failed", "slide_number": 2, "slide_id": "a", "message_id": "200"},
+        {"author": "Dave", "issue": "Could not insert image", "slide_number": 2, "slide_id": "a", "message_id": "200"},
+    ])
+    @patch("weekly_slides_bot.share_presentation")
+    @patch("weekly_slides_bot.copy_presentation", return_value="pres_id")
+    @patch("weekly_slides_bot.get_google_services", return_value=(MagicMock(), MagicMock()))
+    @patch("weekly_slides_bot.load_state", return_value={})
+    async def test_several_errors_are_sent_as_one_message(self, *_):
+        marker_msg = MagicMock(id=100, content="GUESS CHAT Test")
+        sub_msg = MagicMock(id=200, content="SUBMISSION answer", attachments=[])
+        sub_msg.author = MagicMock(id=999, display_name="Dave")
+        sub_msg.guild = MagicMock(id=12345)
+        sub_msg.guild.get_member.return_value = MagicMock(display_name="Dave")
+
+        mock_client, mock_results_channel = _ClientHelper.make_client(marker_msg, sub_msg)
+        await generate_slides(mock_client)
+
+        # Results message + one grouped error message
+        send_calls = mock_results_channel.send.call_args_list
+        assert len(send_calls) == 2
+        assert "2 processing issues" in send_calls[1].args[0]

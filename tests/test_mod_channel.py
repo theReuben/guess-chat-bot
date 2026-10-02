@@ -91,6 +91,21 @@ class TestBuildAnnouncementMessage:
         assert "deadline: <t:" in msg
         assert ":F>" in msg
 
+    def test_deadline_has_a_relative_countdown(self):
+        msg = build_announcement_message("Favourite Food", deadline_ts=1700000000)
+        assert "<t:1700000000:F> (<t:1700000000:R>)" in msg
+
+    def test_everyone_ping_is_not_a_list_item(self):
+        msg = build_announcement_message("Favourite Food")
+        assert "\n@everyone\n" in msg
+
+    def test_shows_an_example_submission(self):
+        msg = build_announcement_message("Favourite Food")
+        assert "`SUBMISSION your answer here`" in msg
+
+    def test_topic_still_parses_from_the_announcement(self):
+        assert extract_topic(build_announcement_message("Favourite Food")) == "FAVOURITE FOOD"
+
     def test_deadline_is_integer_timestamp(self):
         msg = build_announcement_message("Favourite Food")
         match = re.search(r"<t:(\d+):F>", msg)

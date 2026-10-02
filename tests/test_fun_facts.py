@@ -11,7 +11,7 @@ os.environ.setdefault("DISCORD_CHANNEL_ID", "1")
 os.environ.setdefault("DISCORD_RESULTS_CHANNEL_ID", "2")
 os.environ.setdefault("TEMPLATE_DECK_ID", "tpl")
 
-from weekly_slides_bot import generate_fun_facts
+from weekly_slides_bot import clean_fun_facts, generate_fun_facts
 
 
 class TestGenerateFunFacts:
@@ -267,3 +267,28 @@ class TestBuildDeckFunFacts:
         for r in requests_list:
             if "replaceAllText" in r and r["replaceAllText"]["containsText"]["text"] == "{{FUNFACTS}}":
                 assert r["replaceAllText"]["replaceText"] == ""
+
+
+class TestCleanFunFacts:
+    """Gemini's markdown is flattened to plain bullets for the title slide."""
+
+    def test_plain_bullets_pass_through(self):
+        assert clean_fun_facts("• Fact one\n• Fact two") == "• Fact one\n• Fact two"
+
+    def test_markdown_bullets_and_bold_are_stripped(self):
+        text = "* **Cats** dominate\n- Two people chose `dogs`\n1. One outlier"
+        assert clean_fun_facts(text) == "• Cats dominate\n• Two people chose dogs\n• One outlier"
+
+    def test_headings_and_blank_lines_are_dropped(self):
+        assert clean_fun_facts("## Facts\n\n• Only one\n\n") == "• Facts\n• Only one"
+
+    def test_asterisks_inside_words_survive(self):
+        assert clean_fun_facts("• 5*3 is a maths answer") == "• 5*3 is a maths answer"
+
+    @patch("weekly_slides_bot.GEMINI_API_KEY", "fake-key")
+    @patch("weekly_slides_bot.requests.post")
+    def test_generate_returns_cleaned_text(self, mock_post):
+        mock_post.return_value.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "* **Bold** fact"}]}}]
+        }
+        assert generate_fun_facts("Pets", [{"body": "cats"}]) == "• Bold fact"

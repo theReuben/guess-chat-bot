@@ -59,6 +59,12 @@ MODE_SHORTCUTS = {"preview": "preview", "announce": "announce", "time": "strim"}
 # Discord's deadline is 3 seconds; leave room for TLS setup and a cold start.
 _GITHUB_TIMEOUT_S = 2.5
 
+# The bot swaps the reply line starting with this for the run's outcome when
+# it finishes (see report_to_interaction in weekly_slides_bot.py).
+_PENDING_MARKER = "⏳"
+
+_DISCORD_MESSAGE_LIMIT = 2000
+
 
 # ---------------------------------------------------------------------------
 # Request authentication
@@ -151,7 +157,7 @@ def read_state() -> dict:
 
 
 def _reply(content: str, ephemeral: bool = False) -> dict:
-    data: dict = {"content": content}
+    data: dict = {"content": content[:_DISCORD_MESSAGE_LIMIT]}
     if ephemeral:
         data["flags"] = EPHEMERAL
     return {"type": CHANNEL_MESSAGE_WITH_SOURCE, "data": data}
@@ -187,7 +193,7 @@ def _started_message(inputs: dict[str, str]) -> str:
         lines.append("📺 Slides will be posted to the stream channel.")
     if inputs.get("force_reset") == "true":
         lines.append("⚠️ State wiped — brand-new decks will be created.")
-    lines.append(f"Results will be posted when it finishes · <{_workflow_url()}>")
+    lines.append(f"{_PENDING_MARKER} Running… this message updates when it finishes · <{_workflow_url()}>")
     return "\n".join(lines)
 
 
@@ -248,13 +254,23 @@ def _status_reply() -> dict:
         )
 
     lines = [f"**Current round:** {state.get('topic', 'unknown')}"]
+    if state.get("deadline_ts"):
+        ts = state["deadline_ts"]
+        lines.append(f"⏰ Deadline: <t:{ts}:F> (<t:{ts}:R>)")
+    submitters = state.get("submitters")
+    if submitters:
+        lines.append(f"👥 Submissions ({len(submitters)}): {', '.join(submitters)}")
+    else:
+        lines.append(f"Submissions processed: {len(state.get('processed_ids') or [])}")
+    last_run = state.get("last_run") or {}
+    if last_run.get("at"):
+        lines.append(f"🕒 Last run: **{last_run.get('mode', '?')}** <t:{last_run['at']}:R>")
     if state.get("marker_id"):
         lines.append(f"Marker message: `{state['marker_id']}`")
     if state.get("marker_override_id"):
         lines.append(
             f"⚙️ Announcement override active: `{state['marker_override_id']}`"
         )
-    lines.append(f"Submissions processed: {len(state.get('processed_ids') or [])}")
     if state.get("anon_pres_id"):
         lines.append(
             f"Questions: <https://docs.google.com/presentation/d/{state['anon_pres_id']}/edit>"
@@ -282,6 +298,11 @@ def handle_command(interaction: dict) -> dict:
 
     if inputs["bot_mode"] not in VALID_MODES:
         return _reply(f"Unknown mode `{inputs['bot_mode']}`.", ephemeral=True)
+
+    # Lets the bot edit this reply with the outcome once the run finishes.
+    if interaction.get("token") and interaction.get("application_id"):
+        inputs["interaction_app_id"] = str(interaction["application_id"])
+        inputs["interaction_token"] = interaction["token"]
 
     try:
         dispatch_workflow(inputs)

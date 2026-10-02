@@ -37,6 +37,19 @@ on:
         required: false
         default: ''
         type: string
+      # Set by /guesschat so the bot can update its reply; leave blank.  The
+      # bot reads these from the event payload — never reference them with
+      # ${{ }} here, or the token is printed in the public run logs.
+      interaction_app_id:
+        description: 'Set by /guesschat; leave blank'
+        required: false
+        default: ''
+        type: string
+      interaction_token:
+        description: 'Set by /guesschat; leave blank'
+        required: false
+        default: ''
+        type: string
 
 concurrency:
   group: guess-chat

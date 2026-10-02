@@ -531,3 +531,69 @@ def test_an_unsupported_interaction_type_gets_a_400(keypair):
         status, _ = _post(body, signature, timestamp)
 
     assert status == 400
+
+
+# ---------------------------------------------------------------------------
+# Updating the reply when the run finishes
+# ---------------------------------------------------------------------------
+
+
+def test_the_reply_credentials_are_passed_to_the_workflow(allowed):
+    command = _command("preview")
+    command.update({"token": "tok123", "application_id": 555})
+    with patch.object(interactions, "dispatch_workflow") as dispatch:
+        interactions.handle_command(command)
+
+    dispatch.assert_called_once_with({
+        "bot_mode": "preview",
+        "interaction_app_id": "555",
+        "interaction_token": "tok123",
+    })
+
+
+def test_the_confirmation_ends_with_the_pending_line_the_bot_replaces(allowed):
+    with patch.object(interactions, "dispatch_workflow"):
+        reply = interactions.handle_command(_command("preview"))
+
+    last_line = reply["data"]["content"].splitlines()[-1]
+    assert last_line.startswith(interactions._PENDING_MARKER)
+
+
+def test_the_bot_and_endpoint_agree_on_the_pending_marker():
+    source = (Path(__file__).resolve().parents[1] / "weekly_slides_bot.py").read_text()
+    assert f'_PENDING_MARKER = "{interactions._PENDING_MARKER}"' in source
+
+
+def test_workflow_declares_the_reply_inputs_without_expanding_them():
+    workflow = (
+        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "weekly-slides.yml"
+    ).read_text()
+    assert "interaction_app_id:" in workflow
+    assert "interaction_token:" in workflow
+    # Expanding the token with ${{ }} would print it in the public run logs.
+    assert "inputs.interaction_token" not in workflow
+
+
+def test_status_shows_deadline_submitters_and_last_run(allowed):
+    state = {
+        "topic": "T",
+        "deadline_ts": 1700000000,
+        "submitters": ["Amy", "Ben"],
+        "processed_ids": ["1", "2"],
+        "last_run": {"mode": "preview", "at": 1600000000},
+    }
+    with patch.object(interactions, "read_state", return_value=state):
+        content = interactions.handle_command(_command("status"))["data"]["content"]
+
+    assert "<t:1700000000:R>" in content
+    assert "Submissions (2): Amy, Ben" in content
+    assert "Submissions processed" not in content
+    assert "**preview** <t:1600000000:R>" in content
+
+
+def test_status_stays_under_discords_length_limit(allowed):
+    state = {"topic": "T", "submitters": [f"Player number {i}" for i in range(300)]}
+    with patch.object(interactions, "read_state", return_value=state):
+        content = interactions.handle_command(_command("status"))["data"]["content"]
+
+    assert len(content) <= 2000

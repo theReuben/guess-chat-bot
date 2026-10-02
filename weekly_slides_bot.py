@@ -67,6 +67,26 @@ GITHUB_REPOSITORY: str | None = os.environ.get("GITHUB_REPOSITORY")
 # scheduled runs in the same round keep using it.
 MARKER_MESSAGE_ID: str | None = (os.environ.get("MARKER_MESSAGE_ID") or "").strip() or None
 
+
+def _load_dispatch_inputs() -> dict:
+    """Return the workflow_dispatch inputs from the Actions event payload."""
+    path = os.environ.get("GITHUB_EVENT_PATH")
+    if not path:
+        return {}
+    try:
+        return json.loads(Path(path).read_text()).get("inputs") or {}
+    except (OSError, ValueError):
+        return {}
+
+
+# Set when the run was started by a /guesschat slash command, so the bot can
+# replace the "⏳ Running…" reply with the outcome.  Read straight from the
+# event payload rather than through ${{ }} in the workflow: this repo is
+# public, and anything expanded there is printed in the Actions logs.
+_DISPATCH_INPUTS = _load_dispatch_inputs()
+INTERACTION_APP_ID: str | None = _DISPATCH_INPUTS.get("interaction_app_id") or None
+INTERACTION_TOKEN: str | None = _DISPATCH_INPUTS.get("interaction_token") or None
+
 MARKER_PREFIX = "GUESS CHAT"
 SUBMISSION_PREFIX = "SUBMISSION"
 
@@ -164,15 +184,16 @@ def next_friday_deadline_unix(reference_utc: datetime.datetime | None = None) ->
     return int(deadline_uk.timestamp())
 
 
-def build_announcement_message(topic: str) -> str:
+def build_announcement_message(topic: str, deadline_ts: int | None = None) -> str:
     """Build the formatted announcement message for a new Guess Chat round."""
-    deadline_ts = next_friday_deadline_unix()
+    if deadline_ts is None:
+        deadline_ts = next_friday_deadline_unix()
     return (
         f"# GUESS CHAT\n"
         f"# {topic.upper()}\n"
-        f"- @everyone\n"
-        f"- tag with **SUBMISSION**\n"
-        f"- deadline: <t:{deadline_ts}:F>"
+        f"@everyone\n"
+        f"- start your message with **SUBMISSION**, e.g. `SUBMISSION your answer here`\n"
+        f"- deadline: <t:{deadline_ts}:F> (<t:{deadline_ts}:R>)"
     )
 
 
@@ -619,12 +640,28 @@ def _image_requests(slide_id: str, image_urls: list[str], has_text: bool = True)
     img_w = (area_w - gap * (n_cols - 1)) // n_cols
     img_h = (area_h - gap * (n_rows - 1)) // n_rows
 
+    boxes = [
+        (area_x + (idx % n_cols) * (img_w + gap), area_y + (idx // n_cols) * (img_h + gap), img_w, img_h)
+        for idx in range(len(urls))
+    ]
+    if len(urls) == 3:
+        # A 2×2 grid would leave a hole; give the first image a full half of
+        # the area instead, split along the longer side.
+        if area_w >= area_h:
+            boxes = [
+                (area_x, area_y, img_w, area_h),
+                (area_x + img_w + gap, area_y, img_w, img_h),
+                (area_x + img_w + gap, area_y + img_h + gap, img_w, img_h),
+            ]
+        else:
+            boxes = [
+                (area_x, area_y, area_w, img_h),
+                (area_x, area_y + img_h + gap, img_w, img_h),
+                (area_x + img_w + gap, area_y + img_h + gap, img_w, img_h),
+            ]
+
     requests_list = []
-    for idx, img_url in enumerate(urls):
-        col = idx % n_cols
-        row = idx // n_cols
-        left = area_x + col * (img_w + gap)
-        top = area_y + row * (img_h + gap)
+    for img_url, (left, top, box_w, box_h) in zip(urls, boxes):
         requests_list.append(
             {
                 "createImage": {
@@ -632,8 +669,8 @@ def _image_requests(slide_id: str, image_urls: list[str], has_text: bool = True)
                     "elementProperties": {
                         "pageObjectId": slide_id,
                         "size": {
-                            "width": {"magnitude": img_w * _PT, "unit": "EMU"},
-                            "height": {"magnitude": img_h * _PT, "unit": "EMU"},
+                            "width": {"magnitude": box_w * _PT, "unit": "EMU"},
+                            "height": {"magnitude": box_h * _PT, "unit": "EMU"},
                         },
                         "transform": {
                             "scaleX": 1,
@@ -717,20 +754,50 @@ def _elem_area(e: dict) -> float:
     )
 
 
+# Author box labels.  Slides are numbered so chat can refer to them while
+# guessing: "#7" on the anonymous deck, "#7 — Sam" on the named one.  Older
+# decks and hand-added slides use "Answer:" / "Answer: Sam", so both forms are
+# recognised when reading a deck back.
+_AUTHOR_LABEL_RE = re.compile(
+    r"^(?:#\d+(?:\s+[—–-]\s+(?P<numbered>.*))?|Answer:(?P<legacy>.*))$", re.DOTALL
+)
+
+
+def format_author_label(number: int, author: str, named: bool) -> str:
+    """Return the author box text for submission slide *number*."""
+    if named and author:
+        return f"#{number} — {author}"
+    return f"#{number}"
+
+
+def parse_author_label(text: str) -> str | None:
+    """Return the name in an author box label.
+
+    Returns ``""`` for an anonymous label and ``None`` when *text* is not an
+    author label at all.
+    """
+    m = _AUTHOR_LABEL_RE.match(text.strip())
+    if m is None:
+        return None
+    return (m.group("numbered") or m.group("legacy") or "").strip()
+
+
+def _is_author_label(elem: dict) -> bool:
+    return parse_author_label(_get_shape_text(elem)) is not None
+
+
 def _find_author_element(page_elements: list[dict]) -> dict | None:
     """Return the author text box element.
 
     Strategy (most-reliable first):
-    1. Shape whose text starts with "Answer:" — this is explicit and layout-independent.
+    1. Shape whose text is an author label (``#7``, ``#7 — Sam``, ``Answer: Sam``)
+       — this is explicit and layout-independent.
     2. Largest shape physically inside the author bar area (y < threshold).
     """
     shapes = [elem for elem in page_elements if elem.get("shape")]
 
-    # Primary: shape whose text starts with "Answer:" (explicit content signal)
-    candidates = [
-        elem for elem in shapes
-        if _get_shape_text(elem).strip().startswith("Answer:")
-    ]
+    # Primary: shape whose text is an author label (explicit content signal)
+    candidates = [elem for elem in shapes if _is_author_label(elem)]
     if candidates:
         return max(candidates, key=_elem_area)
 
@@ -754,7 +821,7 @@ def _find_body_element(page_elements: list[dict]) -> dict | None:
 
     Strategy (most-reliable first):
     1. Largest non-author shape below the author bar threshold (position-based).
-    2. Largest non-author shape whose text does not start with "Answer:" (content
+    2. Largest non-author shape whose text is not an author label (content
        fallback for slides whose layout does not match the expected positions).
     """
     shapes = [elem for elem in page_elements if elem.get("shape")]
@@ -771,11 +838,8 @@ def _find_body_element(page_elements: list[dict]) -> dict | None:
     if candidates:
         return max(candidates, key=_elem_area)
 
-    # Fallback: largest non-author shape whose text does not start with "Answer:"
-    candidates = [
-        elem for elem in non_author
-        if not _get_shape_text(elem).strip().startswith("Answer:")
-    ]
+    # Fallback: largest non-author shape whose text is not an author label
+    candidates = [elem for elem in non_author if not _is_author_label(elem)]
     if candidates:
         return max(candidates, key=_elem_area)
 
@@ -1034,7 +1098,27 @@ def _video_requests(
 # Fun facts generation (optional, requires GEMINI_API_KEY)
 # ---------------------------------------------------------------------------
 
-_GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+# The -latest alias tracks Google's current Flash model, so this doesn't go
+# stale as models are retired.
+_GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
+
+_FUN_FACT_BULLET_RE = re.compile(r"^(?:#+|[•*\-–]|\d+[.)])\s*")
+_FUN_FACT_MARKUP_RE = re.compile(r"\*\*|__|`|(?<!\w)\*|\*(?!\w)")
+
+
+def clean_fun_facts(text: str) -> str:
+    """Normalise Gemini's reply to plain ``• `` bullets for the title slide.
+
+    The model is asked for plain bullets but often answers in markdown
+    (``* **bold**``, ``1.``, headings), which Slides would show verbatim.
+    """
+    lines = []
+    for line in text.splitlines():
+        line = _FUN_FACT_BULLET_RE.sub("", line.strip())
+        line = _FUN_FACT_MARKUP_RE.sub("", line).strip()
+        if line:
+            lines.append(f"• {line}")
+    return "\n".join(lines)
 
 
 def generate_fun_facts(
@@ -1088,7 +1172,7 @@ def generate_fun_facts(
         data = resp.json()
         text = data["candidates"][0]["content"]["parts"][0]["text"]
         print("[info] Fun facts generated successfully.")
-        return text.strip()
+        return clean_fun_facts(text)
     except Exception as exc:  # noqa: BLE001
         print(f"[warn] Failed to generate fun facts via Gemini API ({exc}); placeholder will be cleared.")
         return ""
@@ -1188,7 +1272,7 @@ def build_deck(
 
         # Move the new slide and replace placeholders in a single batch
         target_index = template_index + i + 1
-        author_text = f"Answer: {author}" if named else "Answer:"
+        author_text = format_author_label(i + 1, author, named)
         batch_requests: list[dict] = [
             {
                 "updateSlidesPosition": {
@@ -1313,13 +1397,20 @@ def append_slides(
     new_submissions: list[dict],
     named: bool,
     image_cache: dict[str, str],
+    seed: int | None = None,
 ) -> list[dict]:
-    """Append slides for new submissions to an existing deck.
+    """Add slides for new submissions to an existing deck.
+
+    Each new slide lands at a random position among the existing submission
+    slides, so late submitters aren't given away by sitting at the end.  Pass
+    the same *seed* for the named and anonymous decks so the slides line up.
+    Every slide is renumbered afterwards.
 
     Returns a list of error dicts (``{"author": ..., "issue": ...}``) for any
     processing problems encountered (e.g. failed image uploads).
     """
     errors: list[dict] = []
+    rng = random.Random(seed)
     pres = execute_with_retry(
         slides_svc.presentations().get(presentationId=pres_id)
     )
@@ -1333,8 +1424,6 @@ def append_slides(
 
     # Use the second-to-last slide as the duplication source
     source_slide_id = slides[-2]["objectId"]
-    end_slide_id = slides[-1]["objectId"]
-    insert_before_index = len(slides) - 1  # before end slide
 
     for i, sub in enumerate(new_submissions):
         author = sub["author"]
@@ -1355,31 +1444,39 @@ def append_slides(
         )
         new_slide_id = dup_resp["replies"][0]["duplicateObject"]["objectId"]
 
-        # Move before the end slide
-        execute_with_retry(
-            slides_svc.presentations().batchUpdate(
-                presentationId=pres_id,
-                body={
-                    "requests": [
-                        {
-                            "updateSlidesPosition": {
-                                "slideObjectIds": [new_slide_id],
-                                "insertionIndex": insert_before_index + i,
-                            }
-                        }
-                    ]
-                },
-            )
-        )
-
-        # Clear existing text elements and replace with new content
         # Get current text in the slide shape elements
         new_pres = execute_with_retry(
             slides_svc.presentations().get(presentationId=pres_id)
         )
-        new_slide = next(
-            s for s in new_pres["slides"] if s["objectId"] == new_slide_id
-        )
+        slide_ids = [s["objectId"] for s in new_pres["slides"]]
+        current_index = slide_ids.index(new_slide_id)
+        new_slide = new_pres["slides"][current_index]
+
+        # Move to a random spot between the title slide and the end slide.
+        # insertionIndex counts positions before the move, hence the +1 when
+        # moving later in the deck.
+        target_index = 1 + rng.randint(0, len(slide_ids) - 3)
+        if target_index != current_index:
+            execute_with_retry(
+                slides_svc.presentations().batchUpdate(
+                    presentationId=pres_id,
+                    body={
+                        "requests": [
+                            {
+                                "updateSlidesPosition": {
+                                    "slideObjectIds": [new_slide_id],
+                                    "insertionIndex": (
+                                        target_index if target_index < current_index
+                                        else target_index + 1
+                                    ),
+                                }
+                            }
+                        ]
+                    },
+                )
+            )
+
+        # Clear existing text elements and replace with new content
 
         page_elements = new_slide.get("pageElements", [])
         body_elem = _find_body_element(page_elements)
@@ -1423,7 +1520,9 @@ def append_slides(
         # We use insertText rather than replaceAllText because the
         # duplicated slide contains real content (not {{AUTHOR}}/{{BODY}}
         # placeholders) and the text was cleared above.
-        author_text = f"Answer: {author}" if named else "Answer:"
+        # Provisional number; the whole deck is renumbered once all new
+        # slides are in place.
+        author_text = format_author_label(target_index, author, named)
         text_requests = []
         if author_obj_id:
             text_requests.append(
@@ -1475,7 +1574,7 @@ def append_slides(
         # Insert images
         if image_urls:
             err_meta = {
-                "slide_number": insert_before_index + i + 1,  # 1-indexed
+                "slide_number": target_index + 1,  # 1-indexed; corrected below
                 "slide_id": new_slide_id,
                 "message_id": sub.get("id", ""),
             }
@@ -1515,15 +1614,66 @@ def append_slides(
             except Exception as exc:  # noqa: BLE001
                 print(f"[warn] Could not embed YouTube video for '{author}': {str(exc) or repr(exc)}")
 
+    slide_numbers = renumber_slides(slides_svc, pres_id, named)
+    for err in errors:
+        err["slide_number"] = slide_numbers.get(err["slide_id"], err["slide_number"])
+
     return errors
+
+
+def renumber_slides(slides_svc, pres_id: str, named: bool) -> dict[str, int]:
+    """Rewrite every author box so submission slides are numbered in order.
+
+    Names are read back off the existing labels, so hand-added slides keep
+    their names and old ``Answer: <name>`` labels are converted.  Returns the
+    1-indexed position of every slide in the deck, keyed by slide ID.
+    """
+    pres = execute_with_retry(
+        slides_svc.presentations().get(presentationId=pres_id)
+    )
+    slides = pres.get("slides", [])
+    requests_list: list[dict] = []
+    number = 0
+    for slide in slides[1:-1]:
+        author_elem = _find_author_element(slide.get("pageElements", []))
+        if author_elem is None:
+            continue
+        text = _get_shape_text(author_elem).strip()
+        name = parse_author_label(text)
+        if name is None:
+            continue
+        number += 1
+        label = format_author_label(number, name, named)
+        if label == text:
+            continue
+        requests_list.extend([
+            {
+                "deleteText": {
+                    "objectId": author_elem["objectId"],
+                    "textRange": {"type": "ALL"},
+                }
+            },
+            {
+                "insertText": {
+                    "objectId": author_elem["objectId"],
+                    "text": label,
+                    "insertionIndex": 0,
+                }
+            },
+        ])
+    if requests_list:
+        execute_with_retry(
+            slides_svc.presentations().batchUpdate(
+                presentationId=pres_id,
+                body={"requests": requests_list},
+            )
+        )
+    return {slide["objectId"]: i + 1 for i, slide in enumerate(slides)}
 
 
 # ---------------------------------------------------------------------------
 # Results message formatting
 # ---------------------------------------------------------------------------
-
-
-_ANSWER_PREFIX = "Answer:"
 
 
 def collect_deck_authors(slides_svc, pres_id: str) -> list[str]:
@@ -1535,9 +1685,10 @@ def collect_deck_authors(slides_svc, pres_id: str) -> list[str]:
     picks them up regardless of how the slide got there.
 
     The first slide (title) and last slide (end) are skipped; every submission
-    slide carries an author box reading ``Answer: <name>``.  Slides whose
-    author box is missing or empty — including the anonymous deck, where it
-    reads just ``Answer:`` — contribute nothing.
+    slide carries an author box reading ``#<n> — <name>`` (or the older
+    ``Answer: <name>``).  Slides whose author box is missing or carries no
+    name — including the anonymous deck, where it reads just ``#<n>`` —
+    contribute nothing.
     """
     pres = execute_with_retry(
         slides_svc.presentations().get(presentationId=pres_id)
@@ -1548,10 +1699,7 @@ def collect_deck_authors(slides_svc, pres_id: str) -> list[str]:
         author_elem = _find_author_element(slide.get("pageElements", []))
         if author_elem is None:
             continue
-        text = _get_shape_text(author_elem).strip()
-        if not text.startswith(_ANSWER_PREFIX):
-            continue
-        name = text[len(_ANSWER_PREFIX):].strip()
+        name = parse_author_label(_get_shape_text(author_elem))
         if name and name not in names:
             names.append(name)
     return names
@@ -1592,7 +1740,8 @@ def format_results_message(
         f"## Guess Chat — {topic}",
         "",
         f"**Questions (anonymous):** {anon_url}",
-        f"**Answers:** {named_url}",
+        # Spoilered so a stray click on the wrong link doesn't ruin the game.
+        f"**Answers:** ||{named_url}||",
         "",
         f"**Submissions ({len(sorted_names)}):**",
     ]
@@ -1606,21 +1755,105 @@ def format_error_message(
     guild_id: int | None,
     channel_id: int,
 ) -> str:
-    """Build a nicely formatted Discord message for a processing error."""
+    """Build one bullet line describing a processing error."""
     s_url = slide_url(pres_id, err.get("slide_id", ""))
     s_num = err.get("slide_number", "?")
     m_id = err.get("message_id", "")
 
-    lines = [
-        f"⚠️ **Processing issue for {err['author']}**",
-        err["issue"],
-    ]
-    links: list[str] = [f"[slide {s_num}]({s_url})"]
+    # <> around the URLs stops Discord unfurling a preview for every link.
+    parts = [f"• **{err['author']}** — {err['issue']}", f"[slide {s_num}](<{s_url}>)"]
     if guild_id is not None and m_id:
         m_url = discord_message_url(guild_id, channel_id, m_id)
-        links.append(f"[message]({m_url})")
-    lines.append(" · ".join(links))
-    return "\n".join(lines)
+        parts.append(f"[message](<{m_url}>)")
+    return " · ".join(parts)
+
+
+_DISCORD_MESSAGE_LIMIT = 2000
+
+
+def format_error_summary(
+    errors: list[dict],
+    pres_id: str,
+    guild_id: int | None,
+    channel_id: int,
+) -> list[str]:
+    """Build the messages reporting a run's processing errors.
+
+    All errors go in one message under a single heading, split only when
+    Discord's length limit would be exceeded.
+    """
+    if not errors:
+        return []
+    plural = "s" if len(errors) != 1 else ""
+    messages = [f"⚠️ **{len(errors)} processing issue{plural}** while building the decks:"]
+    for err in errors:
+        line = format_error_message(err, pres_id, guild_id, channel_id)
+        if len(messages[-1]) + 1 + len(line) > _DISCORD_MESSAGE_LIMIT:
+            messages.append(line)
+        else:
+            messages[-1] += "\n" + line
+    return messages
+
+
+# ---------------------------------------------------------------------------
+# Slash-command reply
+# ---------------------------------------------------------------------------
+
+# One-line summary of what this run did, shown in the slash-command reply.
+_run_outcome: str | None = None
+
+# The interactions endpoint ends its reply with a line starting with this;
+# it is swapped for the outcome when the run finishes.
+_PENDING_MARKER = "⏳"
+
+
+def set_outcome(text: str) -> None:
+    """Record what this run did, for the slash-command reply."""
+    global _run_outcome
+    _run_outcome = text
+
+
+def _run_log_url() -> str | None:
+    server = os.environ.get("GITHUB_SERVER_URL")
+    run_id = os.environ.get("GITHUB_RUN_ID")
+    if not (server and run_id and GITHUB_REPOSITORY):
+        return None
+    return f"{server}/{GITHUB_REPOSITORY}/actions/runs/{run_id}"
+
+
+def report_to_interaction() -> None:
+    """Replace the "⏳ Running…" line of the slash-command reply with the outcome.
+
+    Discord only accepts edits for 15 minutes after the command, so a run that
+    sat in the queue too long just logs a warning.
+    """
+    if not (INTERACTION_APP_ID and INTERACTION_TOKEN):
+        return
+    outcome = _run_outcome or "✅ Finished."
+    log_url = _run_log_url()
+    if log_url:
+        outcome += f" · [run log](<{log_url}>)"
+    url = (
+        f"https://discord.com/api/v10/webhooks/{INTERACTION_APP_ID}/"
+        f"{INTERACTION_TOKEN}/messages/@original"
+    )
+    # Discord's edge rejects generic HTTP-library user agents.
+    headers = {"User-Agent": "DiscordBot (https://github.com/theReuben/guess-chat-bot, 1.0)"}
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        lines = [
+            line for line in (resp.json().get("content") or "").splitlines()
+            if not line.startswith(_PENDING_MARKER)
+        ]
+        lines.append(outcome)
+        content = "\n".join(lines)[:_DISCORD_MESSAGE_LIMIT]
+        requests.patch(url, headers=headers, json={"content": content}, timeout=10).raise_for_status()
+        print("[info] Updated the slash-command reply.")
+    except requests.RequestException as exc:
+        # The exception text includes the URL, and so the token.
+        status = getattr(exc.response, "status_code", None)
+        print(f"[warn] Could not update the slash-command reply (HTTP {status}).")
 
 
 # ---------------------------------------------------------------------------
@@ -1719,6 +1952,7 @@ async def generate_slides(client: discord.Client) -> None:
 
     if marker_msg is None:
         print("[info] No GUESS CHAT marker found; nothing to do.")
+        set_outcome("ℹ️ No GUESS CHAT announcement found, so there's nothing to build.")
         return
 
     marker_id = str(marker_msg.id)
@@ -1793,8 +2027,9 @@ async def generate_slides(client: discord.Client) -> None:
                     msg_text = format_results_message(
                         post_topic, [], named_url, anon_url, deck_authors,
                     )
-                    await post_channel.send(msg_text)
+                    posted = await post_channel.send(msg_text)
                     print("[info] Posted results to channel.")
+                    set_outcome(f"✅ No new submissions; re-posted the current decks: {posted.jump_url}")
             return
         if BOT_MODE in REPOSTING_MODES and is_new_round:
             print(f"[info] New round detected (topic: '{topic}') but no submissions yet.")
@@ -1807,8 +2042,10 @@ async def generate_slides(client: discord.Client) -> None:
                         f"No submissions yet — will generate slides once submissions arrive."
                     )
                     print("[info] Posted new-round notice to channel.")
+            set_outcome(f"ℹ️ **{topic}** has no submissions yet.")
             return
         print("[info] No SUBMISSION messages found after the marker.")
+        set_outcome(f"ℹ️ **{topic}** has no submissions yet.")
         return
 
     # Keep only the latest submission per author
@@ -1850,6 +2087,7 @@ async def generate_slides(client: discord.Client) -> None:
                     "❌ **Google Drive storage quota exceeded** — the bot cannot create "
                     "new slide decks until space is freed up or the storage plan is upgraded."
                 )
+            set_outcome("❌ Google Drive storage is full, so new decks couldn't be created.")
             return
         await asyncio.to_thread(share_presentation, drive_svc, named_pres_id)
         await asyncio.to_thread(share_presentation, drive_svc, anon_pres_id)
@@ -1860,6 +2098,7 @@ async def generate_slides(client: discord.Client) -> None:
     if not new_submissions:
         if BOT_MODE not in REPOSTING_MODES:
             print("[info] No new submissions since last run; nothing to do.")
+            set_outcome("ℹ️ No new submissions since the last run; nothing posted.")
             return
         print("[info] No new submissions — will still post current results.")
 
@@ -1873,12 +2112,16 @@ async def generate_slides(client: discord.Client) -> None:
                 generate_fun_facts, topic, all_submissions, conversation_messages,
             )
             print(f"[info] Building decks for {len(all_submissions)} submission(s).")
-            errors = await asyncio.to_thread(build_deck, slides_svc, drive_svc, named_pres_id, topic, all_submissions, named=True, image_cache=image_cache, fun_facts=fun_facts)
-            await asyncio.to_thread(build_deck, slides_svc, drive_svc, anon_pres_id, topic, all_submissions, named=False, image_cache=image_cache, fun_facts=fun_facts)
+            # Shuffle so the slide order doesn't give away who posted first.
+            # Both decks share the one order so the answers line up.
+            deck_order = random.sample(all_submissions, len(all_submissions))
+            errors = await asyncio.to_thread(build_deck, slides_svc, drive_svc, named_pres_id, topic, deck_order, named=True, image_cache=image_cache, fun_facts=fun_facts)
+            await asyncio.to_thread(build_deck, slides_svc, drive_svc, anon_pres_id, topic, deck_order, named=False, image_cache=image_cache, fun_facts=fun_facts)
         else:
-            print(f"[info] Appending {len(new_submissions)} new submission(s) to existing decks.")
-            errors = await asyncio.to_thread(append_slides, slides_svc, drive_svc, named_pres_id, new_submissions, named=True, image_cache=image_cache)
-            await asyncio.to_thread(append_slides, slides_svc, drive_svc, anon_pres_id, new_submissions, named=False, image_cache=image_cache)
+            print(f"[info] Adding {len(new_submissions)} new submission(s) to existing decks.")
+            seed = random.randrange(2**32)
+            errors = await asyncio.to_thread(append_slides, slides_svc, drive_svc, named_pres_id, new_submissions, named=True, image_cache=image_cache, seed=seed)
+            await asyncio.to_thread(append_slides, slides_svc, drive_svc, anon_pres_id, new_submissions, named=False, image_cache=image_cache, seed=seed)
 
         # Update processed IDs
         for sub in new_submissions:
@@ -1918,7 +2161,10 @@ async def generate_slides(client: discord.Client) -> None:
         if post_channel is None:
             print(f"[error] Could not find results channel {DISCORD_RESULTS_CHANNEL_ID}")
 
-    if post_channel is not None:
+    deck_authors: list[str] = []
+    if post_channel is None:
+        set_outcome("❌ Built the decks but couldn't find the channel to post them in.")
+    else:
         named_url = presentation_url(named_pres_id)
         anon_url = presentation_url(anon_pres_id)
         # Read the names back off the named deck so that slides added by hand
@@ -1927,8 +2173,15 @@ async def generate_slides(client: discord.Client) -> None:
         msg_text = format_results_message(
             topic, all_submissions, named_url, anon_url, deck_authors,
         )
-        await post_channel.send(msg_text)
+        posted = await post_channel.send(msg_text)
         print("[info] Posted results message.")
+        if new_submissions:
+            outcome = f"✅ Added {len(new_submissions)} new submission(s) and posted the decks: {posted.jump_url}"
+        else:
+            outcome = f"✅ No new submissions; re-posted the current decks: {posted.jump_url}"
+        if errors:
+            outcome += f"\n⚠️ {len(errors)} processing issue(s); details sent to the mods."
+        set_outcome(outcome)
 
         # Send error notifications for processing issues
         # In test_slides mode all notifications go to the test channel.
@@ -1942,19 +2195,8 @@ async def generate_slides(client: discord.Client) -> None:
         if error_channel is None:
             error_channel = post_channel
         guild_id = channel.guild.id if channel.guild else None
-        for err in errors:
-            s_url = slide_url(named_pres_id, err.get("slide_id", ""))
-            s_num = err.get("slide_number", "?")
-            m_id = err.get("message_id", "")
-            parts = [
-                f"⚠️ **Processing issue for {err['author']}**",
-                f"on [slide {s_num}]({s_url})",
-            ]
-            if guild_id is not None and m_id:
-                m_url = discord_message_url(guild_id, DISCORD_CHANNEL_ID, m_id)
-                parts.append(f"([message]({m_url}))")
-            parts.append(f": {err['issue']}")
-            await error_channel.send(" ".join(parts))
+        for text in format_error_summary(errors, named_pres_id, guild_id, DISCORD_CHANNEL_ID):
+            await error_channel.send(text)
         if errors:
             print(f"[info] Sent {len(errors)} error notification(s).")
 
@@ -1970,6 +2212,10 @@ async def generate_slides(client: discord.Client) -> None:
         "named_pres_id": named_pres_id,
         "anon_pres_id": anon_pres_id,
         "processed_ids": list(processed_ids),
+        "submitters": sorted(
+            {sub["author"] for sub in all_submissions} | set(deck_authors), key=str.lower,
+        ),
+        "last_run": {"mode": BOT_MODE, "at": int(time.time())},
     })
     if MARKER_MESSAGE_ID:
         # Remember the override so the rest of the round's scheduled runs use
@@ -1998,9 +2244,11 @@ async def adopt_manual_announcement(client: discord.Client, submissions_channel)
         marker_msg = await submissions_channel.fetch_message(int(MARKER_MESSAGE_ID))
     except (discord.HTTPException, ValueError) as exc:
         print(f"[error] Could not fetch marker override message {MARKER_MESSAGE_ID}: {exc}")
+        set_outcome(f"❌ Couldn't fetch message `{MARKER_MESSAGE_ID}` from the submissions channel.")
         return
 
     topic = marker_topic(marker_msg, submissions_channel)
+    set_outcome(f"✅ Using the existing announcement for **{topic}**: {marker_msg.jump_url}")
     print(f"[info] Adopting message {MARKER_MESSAGE_ID} as the announcement for '{topic}'.")
 
     if BOT_MODE == "test_announce":
@@ -2033,6 +2281,7 @@ async def adopt_manual_announcement(client: discord.Client, submissions_channel)
     state = load_state()
     state["last_announced_topic"] = topic
     state["marker_override_id"] = MARKER_MESSAGE_ID
+    state["deadline_ts"] = next_friday_deadline_unix()
     await asyncio.to_thread(save_state, state)
     print("[info] State saved (manual announcement adopted).")
 
@@ -2063,12 +2312,17 @@ async def check_mod_and_announce(client: discord.Client) -> None:
     topic = parse_channel_topic(description)
     if topic is None:
         print("[info] Channel description does not contain a Guess Chat topic; nothing to do.")
+        set_outcome(
+            "ℹ️ The submissions channel description has no "
+            "`Current Guess Chat: <topic>` line, so nothing was announced."
+        )
         return
 
     # --- Check whether this topic has already been announced ---
     state = load_state()
     if topic == state.get("last_announced_topic"):
         print("[info] Topic unchanged; already announced.")
+        set_outcome(f"ℹ️ **{topic}** was already announced, so the mods were sent a reminder instead.")
         # Send a reminder asking if there's a new topic.
         # In test_announce mode the reminder goes to the test channel.
         if BOT_MODE == "test_announce":
@@ -2103,8 +2357,10 @@ async def check_mod_and_announce(client: discord.Client) -> None:
     else:
         announce_channel = submissions_channel
         announce_channel_id = DISCORD_CHANNEL_ID
-    posted_msg = await announce_channel.send(build_announcement_message(topic))
+    deadline_ts = next_friday_deadline_unix()
+    posted_msg = await announce_channel.send(build_announcement_message(topic, deadline_ts))
     print(f"[info] Posted GUESS CHAT announcement for topic '{topic}'.")
+    set_outcome(f"✅ Announced **{topic}**: {posted_msg.jump_url}")
 
     # --- Send confirmation ---
     # In test_announce mode the confirmation also goes to the test channel.
@@ -2140,6 +2396,7 @@ async def check_mod_and_announce(client: discord.Client) -> None:
         print("[info] test_announce mode — skipping state persistence.")
         return
     state["last_announced_topic"] = topic
+    state["deadline_ts"] = deadline_ts
     # The bot has announced this round itself, so any override saved for the
     # previous round no longer applies.
     state.pop("marker_override_id", None)
@@ -2165,13 +2422,18 @@ class OneShotClient(discord.Client):
                 await generate_slides(self)
         except Exception as exc:
             print(f"[error] Unhandled exception in on_ready: {exc}")
+            set_outcome(f"❌ The run failed: {str(exc) or type(exc).__name__}")
             await asyncio.to_thread(create_github_issue, exc)
             raise
         finally:
+            await asyncio.to_thread(report_to_interaction)
             await self.close()
 
 
 def main() -> None:
+    if INTERACTION_TOKEN:
+        # Keep the token out of the public Actions logs, e.g. in tracebacks.
+        print(f"::add-mask::{INTERACTION_TOKEN}")
     intents = discord.Intents.default()
     intents.message_content = True
     client = OneShotClient(intents=intents)

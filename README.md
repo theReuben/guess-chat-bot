@@ -24,13 +24,14 @@ When a mod updates the submissions channel description to `Current Guess Chat: <
 - **Manually added slides are listed** — the submitter list in the results message is read back off the **named** deck as well as from Discord, so slides added by hand (mod extras, submissions relayed from elsewhere) appear alongside the rest.
 - **Mod channel confirmation** — after posting a new announcement, sends a confirmation to the mod channel with `@Mods`, the new theme, a link to the posted message, and asks whether there are any extras to add.
 - **Friday reminder** — if the topic hasn't changed by the Friday run, sends a reminder to the mod channel asking if there's a new guess chat this week.
-- **Error routing** — processing errors (e.g. image upload failures) are sent to the mod channel when configured, falling back to the results channel.
-- **Image support** — Discord attachment images are re-uploaded to Google Drive (to avoid CDN link expiration) and placed in a 2×2 grid on each slide.
+- **Error routing** — processing errors (e.g. image upload failures) are grouped into a single message in the mod channel when configured, falling back to the results channel.
+- **Image support** — Discord attachment images are re-uploaded to Google Drive (to avoid CDN link expiration) and laid out on each slide (up to four; three images get one large and two small).
 - **YouTube video embedding** — YouTube links in submissions are detected and embedded as playable videos on the slide (first video only; used when no image attachments are present).
 - **Clickable hyperlinks** — URLs in submission text are automatically converted to clickable hyperlinks on the slides.
 - **Markdown-tolerant detection** — `GUESS CHAT` and `SUBMISSION` prefixes are recognised even with leading markdown formatting (headings, bold, italic), e.g. `# GUESS CHAT` or `**SUBMISSION**`.
 - **Display name resolution** — the bot fetches each submitter's guild member profile to use their server nickname (`display_name`) instead of their username.
-- **Incremental updates** — if the bot runs again in the same round, it appends only the new submissions.
+- **Shuffled, numbered slides** — slides are shuffled (in the same order for both decks) so the order doesn't reveal who posted first, and numbered (`#7` anonymous, `#7 — Sam` named) so chat can refer to them while guessing.
+- **Incremental updates** — if the bot runs again in the same round, it adds only the new submissions, each at a random position, and renumbers the decks. Numbers can therefore shift if submissions arrive after the decks have been shared.
 - **Duplicate prevention** — processed message IDs are stored in state; only the latest submission per author is kept.
 - **Auto-posting** — posts results directly to a Discord channel.
 - **API retry with backoff** — transient Google API errors (429, 500, 503) are retried with exponential backoff.
@@ -101,7 +102,7 @@ The bot can automatically generate fun facts about each round's submissions usin
 4. Copy the generated key — this is your `GEMINI_API_KEY`.
 5. Add it as a GitHub Actions secret (see [GitHub Secrets](#github-secrets) below) or to your `.env` file for local runs.
 
-> **Cost:** The Gemini API free tier allows **15 requests per minute** and **1,500 requests per day** for `gemini-2.5-flash` — more than enough for this bot, which makes one request per round. There is no charge unless you explicitly upgrade to a paid plan. See the [Gemini API pricing page](https://ai.google.dev/pricing) for current limits.
+> **Cost:** The Gemini API free tier allows **15 requests per minute** and **1,500 requests per day** for Gemini Flash (the bot uses the `gemini-flash-latest` alias) — more than enough for this bot, which makes one request per round. There is no charge unless you explicitly upgrade to a paid plan. See the [Gemini API pricing page](https://ai.google.dev/pricing) for current limits.
 
 ### Template Deck
 
@@ -274,7 +275,9 @@ Discord requires a reply within **3 seconds** and a deck build takes minutes, so
 | `/guesschat time` | Guess chat time — generate the slides and post them to the stream channel |
 | `/guesschat marker message_id:<id> [mode]` | Adopt an announcement someone else posted — see [Announcement Override](#announcement-override) |
 | `/guesschat run mode:<mode> [marker_message_id] [force_reset]` | Full control over every workflow input |
-| `/guesschat status` | Current round, marker, processed count and deck links (private reply) |
+| `/guesschat status` | Current round, deadline, who has submitted, last run, marker and deck links (private reply) |
+
+The reply to a run command ends with a `⏳ Running…` line. When the run finishes, the bot replaces it with the outcome (e.g. `✅ Announced …` or `❌ The run failed …`) and a link to the run log. Discord only allows this within 15 minutes of the command, so a run that waits longer in the queue leaves the reply as it was. The interaction token travels as a workflow input. The bot reads it straight from the event payload and masks it, so it never shows up in this public repo's Actions logs.
 
 Access is restricted two ways: the command is registered with `default_member_permissions` = `MANAGE_GUILD` so Discord hides it from non-mods, and the endpoint independently re-checks the guild ID and (optionally) a mod role ID, because the URL is public.
 
@@ -346,7 +349,7 @@ Notes:
 ## Guess Chat — DnD Characters
 
 **Questions (anonymous):** https://docs.google.com/presentation/d/.../edit?usp=sharing
-**Answers:** https://docs.google.com/presentation/d/.../edit?usp=sharing
+**Answers:** ||https://docs.google.com/presentation/d/.../edit?usp=sharing||
 
 **Submissions (4):**
   • Alice
@@ -387,7 +390,7 @@ The slides guard uses a 30-minute grace window (12:00–12:29 UK) to survive Git
 
 ## Cost
 
-Running on GitHub Actions free tier: **$0/month**. Each run takes under a minute. The optional Gemini fun-facts feature uses the free tier of the Gemini API (up to 1,500 requests/day for `gemini-2.5-flash`), so there is no additional cost.
+Running on GitHub Actions free tier: **$0/month**. Each run takes under a minute. The optional Gemini fun-facts feature uses the free tier of the Gemini API (up to 1,500 requests/day for Gemini Flash), so there is no additional cost.
 
 ---
 

@@ -10,6 +10,8 @@ os.environ.setdefault("DISCORD_CHANNEL_ID", "1")
 os.environ.setdefault("DISCORD_RESULTS_CHANNEL_ID", "2")
 os.environ.setdefault("TEMPLATE_DECK_ID", "tpl")
 
+import random
+
 from weekly_slides_bot import (
     _AUTHOR_BAR_PT,
     _IMG_MARGIN_PT,
@@ -21,6 +23,11 @@ from weekly_slides_bot import (
     _get_shape_text,
     append_slides,
 )
+
+# With seed=0 and one existing submission slide, the new slide's position
+# among the submission slides is drawn the same way append_slides draws it.
+EXPECTED_POSITION = 1 + random.Random(0).randint(0, 1)
+EXPECTED_NEW_LABEL = f"#{EXPECTED_POSITION} — NewUser"
 
 
 def _make_shape_element(obj_id: str, x_pt: float, y_pt: float, w_pt: float, h_pt: float, text: str | None = None):
@@ -108,7 +115,8 @@ class TestAppendSlidesUsesInsertText:
 
         submissions = [{"id": "1", "author": "NewUser", "body": "New body text", "images": [], "youtube_ids": []}]
 
-        with patch("weekly_slides_bot.execute_with_retry", side_effect=lambda req: req()):
+        with patch("weekly_slides_bot.execute_with_retry", side_effect=lambda req: req()), \
+                patch("weekly_slides_bot.renumber_slides", return_value={}):
             errors = append_slides(
                 mock_slides_svc,
                 mock_drive_svc,
@@ -116,6 +124,7 @@ class TestAppendSlidesUsesInsertText:
                 submissions,
                 named=True,
                 image_cache={},
+                seed=0,
             )
 
         assert errors == []
@@ -132,11 +141,11 @@ class TestAppendSlidesUsesInsertText:
 
         # Verify the correct text was inserted
         inserted_texts = {r["insertText"]["text"] for r in insert_text_reqs}
-        assert "Answer: NewUser" in inserted_texts
+        assert EXPECTED_NEW_LABEL in inserted_texts
         assert "New body text" in inserted_texts
 
     def test_anonymous_mode_author_text(self):
-        """In anonymous mode, the author text should be 'Answer:' without the name."""
+        """In anonymous mode, the author text is just the slide number."""
         title_slide = {"objectId": "title", "pageElements": []}
         existing_slide = _fake_slide("existing")
         end_slide = {"objectId": "end", "pageElements": []}
@@ -177,7 +186,8 @@ class TestAppendSlidesUsesInsertText:
 
         submissions = [{"id": "1", "author": "TestUser", "body": "My answer", "images": [], "youtube_ids": []}]
 
-        with patch("weekly_slides_bot.execute_with_retry", side_effect=lambda req: req()):
+        with patch("weekly_slides_bot.execute_with_retry", side_effect=lambda req: req()), \
+                patch("weekly_slides_bot.renumber_slides", return_value={}):
             append_slides(
                 mock_slides_svc,
                 mock_drive_svc,
@@ -185,12 +195,13 @@ class TestAppendSlidesUsesInsertText:
                 submissions,
                 named=False,
                 image_cache={},
+                seed=0,
             )
 
         all_requests = [req for batch in batch_calls for req in batch]
         insert_text_reqs = [r for r in all_requests if "insertText" in r]
         inserted_texts = {r["insertText"]["text"] for r in insert_text_reqs}
-        assert "Answer:" in inserted_texts
+        assert f"#{EXPECTED_POSITION}" in inserted_texts
         assert "My answer" in inserted_texts
 
 
@@ -321,7 +332,8 @@ class TestFallbackAppendSlides:
 
         submissions = [{"id": "1", "author": "NewUser", "body": "New body text", "images": [], "youtube_ids": []}]
 
-        with patch("weekly_slides_bot.execute_with_retry", side_effect=lambda req: req()):
+        with patch("weekly_slides_bot.execute_with_retry", side_effect=lambda req: req()), \
+                patch("weekly_slides_bot.renumber_slides", return_value={}):
             errors = append_slides(
                 mock_slides_svc,
                 MagicMock(),
@@ -329,6 +341,7 @@ class TestFallbackAppendSlides:
                 submissions,
                 named=True,
                 image_cache={},
+                seed=0,
             )
 
         assert errors == []
@@ -337,12 +350,12 @@ class TestFallbackAppendSlides:
         insert_text_reqs = [r for r in all_requests if "insertText" in r]
         assert len(insert_text_reqs) == 2, f"Expected 2 insertText requests, got {len(insert_text_reqs)}"
         inserted_texts = {r["insertText"]["text"] for r in insert_text_reqs}
-        assert "Answer: NewUser" in inserted_texts
+        assert EXPECTED_NEW_LABEL in inserted_texts
         assert "New body text" in inserted_texts
 
         # Ensure the author text is written into the author textbox on the new slide
         author_req = next(
-            r for r in insert_text_reqs if r["insertText"]["text"] == "Answer: NewUser"
+            r for r in insert_text_reqs if r["insertText"]["text"] == EXPECTED_NEW_LABEL
         )
         assert author_req["insertText"]["objectId"] == f"{new_slide_id}_author"
 
@@ -441,7 +454,8 @@ class TestFallbackAppendSlides:
             }
         ]
 
-        with patch("weekly_slides_bot.execute_with_retry", side_effect=lambda req: req()):
+        with patch("weekly_slides_bot.execute_with_retry", side_effect=lambda req: req()), \
+                patch("weekly_slides_bot.renumber_slides", return_value={}):
             errors = append_slides(
                 mock_slides_svc,
                 MagicMock(),
@@ -449,6 +463,7 @@ class TestFallbackAppendSlides:
                 submissions,
                 named=True,
                 image_cache={},
+                seed=0,
             )
 
         assert errors == []
@@ -457,11 +472,11 @@ class TestFallbackAppendSlides:
         insert_text_reqs = [r for r in all_requests if "insertText" in r]
         assert len(insert_text_reqs) == 2, f"Expected 2 insertText requests, got {len(insert_text_reqs)}"
         inserted_texts = {r["insertText"]["text"] for r in insert_text_reqs}
-        assert "Answer: NewUser" in inserted_texts
+        assert EXPECTED_NEW_LABEL in inserted_texts
         assert "New body text" in inserted_texts
 
         author_req = next(
-            r for r in insert_text_reqs if r["insertText"]["text"] == "Answer: NewUser"
+            r for r in insert_text_reqs if r["insertText"]["text"] == EXPECTED_NEW_LABEL
         )
         assert author_req["insertText"]["objectId"] == f"{new_slide_id}_author"
 

@@ -156,3 +156,9 @@ async def test_read_deck_authors_survives_api_failure():
         "weekly_slides_bot.collect_deck_authors", side_effect=RuntimeError("boom")
     ):
         assert await read_deck_authors(MagicMock(), "pres") == []
+
+
+def test_results_message_hides_the_answers_link_behind_a_spoiler():
+    msg = format_results_message("T", [], "https://named", "https://anon")
+    assert "||https://named||" in msg
+    assert "||https://anon||" not in msg

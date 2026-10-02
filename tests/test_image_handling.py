@@ -427,3 +427,38 @@ class TestTextFitRequests:
         assert style_req["textRange"]["type"] == "ALL"
         assert style_req["style"]["fontSize"]["unit"] == "PT"
         assert style_req["style"]["fontSize"]["magnitude"] < _DEFAULT_FONT_PT
+
+
+def _boxes(reqs):
+    out = []
+    for r in reqs:
+        props = r["createImage"]["elementProperties"]
+        out.append((
+            props["transform"]["translateX"] / _PT,
+            props["transform"]["translateY"] / _PT,
+            props["size"]["width"]["magnitude"] / _PT,
+            props["size"]["height"]["magnitude"] / _PT,
+        ))
+    return out
+
+
+class TestThreeImageLayout:
+    """Three images fill the area instead of leaving a hole in a 2×2 grid."""
+
+    def test_wide_area_puts_the_first_image_full_height_on_the_left(self):
+        (big, top_right, bottom_right) = _boxes(_image_requests(_SLIDE_ID, _URLS[:3], has_text=False))
+        assert big[2] == top_right[2] == bottom_right[2]  # equal column widths
+        assert big[3] > top_right[3] * 2  # spans both rows
+        assert top_right[0] == bottom_right[0] > big[0]
+        assert bottom_right[1] > top_right[1] == big[1]
+
+    def test_tall_area_puts_the_first_image_full_width_on_top(self):
+        # The image column beside text is narrower than it is tall.
+        (big, bottom_left, bottom_right) = _boxes(_image_requests(_SLIDE_ID, _URLS[:3], has_text=True))
+        assert big[2] > bottom_left[2] * 2  # spans both columns
+        assert bottom_left[1] == bottom_right[1] > big[1]
+        assert bottom_right[0] > bottom_left[0] == big[0]
+
+    def test_two_and_four_images_keep_the_grid(self):
+        four = _boxes(_image_requests(_SLIDE_ID, _URLS, has_text=False))
+        assert len({(w, h) for _, _, w, h in four}) == 1

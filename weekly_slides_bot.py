@@ -1029,19 +1029,22 @@ def _elem_area(e: dict) -> float:
 
 
 # Author box labels.  Slides are numbered so chat can refer to them while
-# guessing: "#7" on the anonymous deck, "#7 — Sam" on the named one.  Older
-# decks and hand-added slides use "Answer:" / "Answer: Sam", so both forms are
-# recognised when reading a deck back.
+# guessing: "#7 — Answer:" on the anonymous deck, "#7 — Answer: Sam" on the
+# named one.  Decks built between the number being added and "Answer:" coming
+# back read "#7" / "#7 — Sam", and older decks and hand-added slides use
+# "Answer:" / "Answer: Sam", so all of these are recognised when reading a
+# deck back.
 _AUTHOR_LABEL_RE = re.compile(
-    r"^(?:#\d+(?:\s+[—–-]\s+(?P<numbered>.*))?|Answer:(?P<legacy>.*))$", re.DOTALL
+    r"^(?:#\d+(?:\s+[—–-](?:\s+Answer:)?\s*(?P<numbered>.*))?|Answer:(?P<legacy>.*))$",
+    re.DOTALL,
 )
 
 
 def format_author_label(number: int, author: str, named: bool) -> str:
     """Return the author box text for submission slide *number*."""
     if named and author:
-        return f"#{number} — {author}"
-    return f"#{number}"
+        return f"#{number} — Answer: {author}"
+    return f"#{number} — Answer:"
 
 
 def parse_author_label(text: str) -> str | None:

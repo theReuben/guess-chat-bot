@@ -33,7 +33,7 @@ When a mod updates the submissions channel description to `Current Guess Chat: <
 - **Display name resolution** — the bot fetches each submitter's guild member profile to use their server nickname (`display_name`) instead of their username.
 - **Shuffled, numbered slides** — slides are shuffled (in the same order for both decks) so the order doesn't reveal who posted first, and numbered (`#7 — Answer:` anonymous, `#7 — Answer: Sam` named) so chat can refer to them while guessing.
 - **Incremental updates** — if the bot runs again in the same round, it adds only the new submissions, each at a random position, and renumbers the decks. Numbers can therefore shift if submissions arrive after the decks have been shared.
-- **Duplicate prevention** — processed message IDs are stored in state; only the latest submission per author is kept.
+- **Duplicate prevention** — processed message IDs are stored in state, and only each player's latest submission is kept (matched by Discord user ID, so a nickname change doesn't count as a new player). If someone resubmits after their slide has been built, that slide is updated in place in both decks, keeping its number and position. If the earlier slide can't be found, the new one is added and the mods are told to remove the old one.
 - **Auto-posting** — posts results directly to a Discord channel.
 - **API retry with backoff** — transient Google API errors (429, 500, 503) are retried with exponential backoff.
 - **Scheduled runs** — GitHub Actions triggers every Friday at 11:30 AM UK time (handles BST/GMT automatically).

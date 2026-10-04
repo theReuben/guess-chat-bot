@@ -1567,6 +1567,92 @@ def build_deck(
     return errors
 
 
+def _fill_slide(
+    slides_svc,
+    drive_svc,
+    pres_id: str,
+    slide: dict,
+    page_size: tuple[float, float],
+    sub: dict,
+    image_cache: dict[str, UploadedImage],
+    author_text: str,
+    slide_number: int,
+) -> list[dict]:
+    """Replace everything on an existing submission slide with *sub*.
+
+    Used for slides copied from another submission and for slides whose
+    author has resubmitted.  The text boxes are emptied and refilled rather
+    than replaced so they keep the template's styling; images and videos are
+    removed.  Returns error dicts for any processing problems.
+    """
+    slide_id = slide["objectId"]
+    page_elements = slide.get("pageElements", [])
+    body_elem = _find_body_element(page_elements)
+    author_elem = _find_author_element(page_elements)
+
+    clear_requests = []
+    for elem in page_elements:
+        if elem.get("shape", {}).get("text"):
+            clear_requests.append(
+                {
+                    "deleteText": {
+                        "objectId": elem["objectId"],
+                        "textRange": {"type": "ALL"},
+                    }
+                }
+            )
+        elif elem.get("image") or elem.get("video"):
+            clear_requests.append({"deleteObject": {"objectId": elem["objectId"]}})
+    if clear_requests:
+        execute_with_retry(
+            slides_svc.presentations().batchUpdate(
+                presentationId=pres_id,
+                body={"requests": clear_requests},
+            )
+        )
+
+    # insertText rather than replaceAllText: the slide holds real content,
+    # not {{AUTHOR}}/{{BODY}} placeholders, and it was cleared above.
+    text_requests = []
+    if author_elem:
+        text_requests.append(
+            {
+                "insertText": {
+                    "objectId": author_elem["objectId"],
+                    "text": author_text,
+                    "insertionIndex": 0,
+                }
+            }
+        )
+    if body_elem and sub["body"]:
+        text_requests.append(
+            {
+                "insertText": {
+                    "objectId": body_elem["objectId"],
+                    "text": sub["body"],
+                    "insertionIndex": 0,
+                }
+            }
+        )
+    if text_requests:
+        execute_with_retry(
+            slides_svc.presentations().batchUpdate(
+                presentationId=pres_id,
+                body={"requests": text_requests},
+            )
+        )
+
+    return _lay_out_submission(
+        slides_svc, drive_svc, pres_id, slide_id, page_elements, page_size,
+        sub, image_cache,
+        err_meta={
+            "slide_number": slide_number,
+            "slide_id": slide_id,
+            "message_id": sub.get("id", ""),
+        },
+    )
+
+
 def append_slides(
     slides_svc,
     drive_svc,
@@ -1604,8 +1690,6 @@ def append_slides(
     page_size = _page_size_pt(pres)
 
     for i, sub in enumerate(new_submissions):
-        author = sub["author"]
-        body_text = sub["body"]
 
         # Duplicate an existing submission slide
         dup_resp = execute_with_retry(
@@ -1652,86 +1736,12 @@ def append_slides(
                 )
             )
 
-        # Clear existing text elements and replace with new content
-
-        page_elements = new_slide.get("pageElements", [])
-        body_elem = _find_body_element(page_elements)
-        author_elem = _find_author_element(page_elements)
-        body_obj_id = body_elem["objectId"] if body_elem else None
-        author_obj_id = author_elem["objectId"] if author_elem else None
-
-        clear_requests = []
-        for elem in page_elements:
-            shape = elem.get("shape", {})
-            if shape.get("text"):
-                clear_requests.append(
-                    {
-                        "deleteText": {
-                            "objectId": elem["objectId"],
-                            "textRange": {"type": "ALL"},
-                        }
-                    }
-                )
-            elif elem.get("image"):
-                clear_requests.append(
-                    {"deleteObject": {"objectId": elem["objectId"]}}
-                )
-            elif elem.get("video"):
-                clear_requests.append(
-                    {"deleteObject": {"objectId": elem["objectId"]}}
-                )
-        if clear_requests:
-            execute_with_retry(
-                slides_svc.presentations().batchUpdate(
-                    presentationId=pres_id,
-                    body={"requests": clear_requests},
-                )
-            )
-
-        # Insert new text directly into the identified shapes.
-        # We use insertText rather than replaceAllText because the
-        # duplicated slide contains real content (not {{AUTHOR}}/{{BODY}}
-        # placeholders) and the text was cleared above.
         # Provisional number; the whole deck is renumbered once all new
         # slides are in place.
-        author_text = format_author_label(target_index, author, named)
-        text_requests = []
-        if author_obj_id:
-            text_requests.append(
-                {
-                    "insertText": {
-                        "objectId": author_obj_id,
-                        "text": author_text,
-                        "insertionIndex": 0,
-                    }
-                }
-            )
-        if body_obj_id:
-            text_requests.append(
-                {
-                    "insertText": {
-                        "objectId": body_obj_id,
-                        "text": body_text,
-                        "insertionIndex": 0,
-                    }
-                }
-            )
-        if text_requests:
-            execute_with_retry(
-                slides_svc.presentations().batchUpdate(
-                    presentationId=pres_id,
-                    body={"requests": text_requests},
-                )
-            )
-
-        errors.extend(_lay_out_submission(
-            slides_svc, drive_svc, pres_id, new_slide_id, page_elements, page_size,
-            sub, image_cache,
-            err_meta={
-                "slide_number": target_index + 1,  # 1-indexed; corrected below
-                "slide_id": new_slide_id,
-                "message_id": sub.get("id", ""),
-            },
+        errors.extend(_fill_slide(
+            slides_svc, drive_svc, pres_id, new_slide, page_size, sub, image_cache,
+            author_text=format_author_label(target_index, sub["author"], named),
+            slide_number=target_index + 1,  # 1-indexed; corrected below
         ))
 
     slide_numbers = renumber_slides(slides_svc, pres_id, named)
@@ -1739,6 +1749,103 @@ def append_slides(
         err["slide_number"] = slide_numbers.get(err["slide_id"], err["slide_number"])
 
     return errors
+
+
+def submitter_key(sub: dict) -> str:
+    """Identify who sent a submission.
+
+    The Discord user ID, so a nickname change doesn't look like a new
+    player; the display name for submissions recorded without one.
+    """
+    return sub.get("author_id") or sub["author"]
+
+
+_LABEL_NUMBER_RE = re.compile(r"^\s*#(\d+)")
+
+
+def _slide_label(slide: dict) -> str:
+    author_elem = _find_author_element(slide.get("pageElements", []))
+    return _get_shape_text(author_elem).strip() if author_elem else ""
+
+
+def replace_resubmitted_slides(
+    slides_svc,
+    drive_svc,
+    named_pres_id: str,
+    anon_pres_id: str,
+    resubmissions: list[dict],
+    image_cache: dict[str, UploadedImage],
+) -> tuple[list[dict], list[dict]]:
+    """Update the existing slides of people who have resubmitted.
+
+    The earlier slide is found by name in the named deck; the anonymous
+    deck's slide is the one with the same number.  It is refilled in place in
+    both decks, so slide numbers and positions don't change.  Nothing linking
+    people to anonymous slides is stored, as the state is public.
+
+    Returns error dicts, and the resubmissions whose earlier slide couldn't
+    be found (to be added as new slides instead).
+    """
+    errors: list[dict] = []
+    not_found: list[dict] = []
+    named_pres = execute_with_retry(
+        slides_svc.presentations().get(presentationId=named_pres_id)
+    )
+    anon_pres = execute_with_retry(
+        slides_svc.presentations().get(presentationId=anon_pres_id)
+    )
+
+    def numbered(pres: dict) -> dict[int, dict]:
+        # Labels from before slides were numbered ("Answer: Sam") fall back to
+        # their position, which is what renumbering would give them.
+        slides = {}
+        for position, slide in enumerate(pres.get("slides", [])[1:-1], start=1):
+            m = _LABEL_NUMBER_RE.match(_slide_label(slide))
+            slides.setdefault(int(m.group(1)) if m else position, slide)
+        return slides
+
+    named_by_number = numbered(named_pres)
+    anon_by_number = numbered(anon_pres)
+
+    for sub in resubmissions:
+        number = next(
+            (
+                n for n, slide in sorted(named_by_number.items())
+                if parse_author_label(_slide_label(slide)) == sub["author"]
+            ),
+            None,
+        )
+        if number is None or number not in anon_by_number:
+            print(f"[warn] Could not find the earlier slide for '{sub['author']}'; adding a new one.")
+            errors.append({
+                "author": sub["author"],
+                "issue": (
+                    "Resubmitted, but their earlier slide couldn't be found, so the new "
+                    "submission was added as a separate slide. Remove the old one by hand "
+                    "if it's still in the decks."
+                ),
+                "slide_number": "?",
+                "slide_id": "",
+                "message_id": sub.get("id", ""),
+            })
+            not_found.append(sub)
+            continue
+
+        print(f"[info] Replacing slide {number} with '{sub['author']}'s resubmission.")
+        for pres_id, pres, by_number, named in (
+            (named_pres_id, named_pres, named_by_number, True),
+            (anon_pres_id, anon_pres, anon_by_number, False),
+        ):
+            slide = by_number[number]
+            slide_errors = _fill_slide(
+                slides_svc, drive_svc, pres_id, slide, _page_size_pt(pres),
+                sub, image_cache,
+                author_text=format_author_label(number, sub["author"], named),
+                slide_number=1 + pres["slides"].index(slide),
+            )
+            if named:
+                errors.extend(slide_errors)
+    return errors, not_found
 
 
 def renumber_slides(slides_svc, pres_id: str, named: bool) -> dict[str, int]:
@@ -2112,6 +2219,7 @@ async def generate_slides(client: discord.Client) -> None:
                 {
                     "id": str(msg.id),
                     "author": author_name,
+                    "author_id": str(uid),
                     "body": body,
                     "images": images,
                     "youtube_ids": youtube_ids,
@@ -2168,11 +2276,14 @@ async def generate_slides(client: discord.Client) -> None:
         set_outcome(f"ℹ️ **{topic}** has no submissions yet.")
         return
 
-    # Keep only the latest submission per author
-    seen_authors: dict[str, int] = {}
+    # Keep only the latest submission per person
+    latest: dict[str, int] = {}
     for i, sub in enumerate(all_submissions):
-        seen_authors[sub["author"]] = i
-    all_submissions = [all_submissions[i] for i in sorted(seen_authors.values())]
+        latest[submitter_key(sub)] = i
+    superseded = [
+        sub for i, sub in enumerate(all_submissions) if latest[submitter_key(sub)] != i
+    ]
+    all_submissions = [all_submissions[i] for i in sorted(latest.values())]
 
     slides_svc, drive_svc = await asyncio.to_thread(get_google_services)
 
@@ -2238,10 +2349,26 @@ async def generate_slides(client: discord.Client) -> None:
             errors = await asyncio.to_thread(build_deck, slides_svc, drive_svc, named_pres_id, topic, deck_order, named=True, image_cache=image_cache, fun_facts=fun_facts)
             await asyncio.to_thread(build_deck, slides_svc, drive_svc, anon_pres_id, topic, deck_order, named=False, image_cache=image_cache, fun_facts=fun_facts)
         else:
-            print(f"[info] Adding {len(new_submissions)} new submission(s) to existing decks.")
-            seed = random.randrange(2**32)
-            errors = await asyncio.to_thread(append_slides, slides_svc, drive_svc, named_pres_id, new_submissions, named=True, image_cache=image_cache, seed=seed)
-            await asyncio.to_thread(append_slides, slides_svc, drive_svc, anon_pres_id, new_submissions, named=False, image_cache=image_cache, seed=seed)
+            # Someone whose earlier submission already has a slide has
+            # resubmitted: update that slide rather than adding a second one.
+            already_on_deck = {
+                submitter_key(sub) for sub in superseded if sub["id"] in processed_ids
+            }
+            resubmissions = [s for s in new_submissions if submitter_key(s) in already_on_deck]
+            to_add = [s for s in new_submissions if submitter_key(s) not in already_on_deck]
+            if resubmissions:
+                print(f"[info] Replacing {len(resubmissions)} resubmitted slide(s).")
+                replace_errors, not_found = await asyncio.to_thread(
+                    replace_resubmitted_slides, slides_svc, drive_svc,
+                    named_pres_id, anon_pres_id, resubmissions, image_cache,
+                )
+                errors.extend(replace_errors)
+                to_add.extend(not_found)
+            if to_add:
+                print(f"[info] Adding {len(to_add)} new submission(s) to existing decks.")
+                seed = random.randrange(2**32)
+                errors.extend(await asyncio.to_thread(append_slides, slides_svc, drive_svc, named_pres_id, to_add, named=True, image_cache=image_cache, seed=seed))
+                await asyncio.to_thread(append_slides, slides_svc, drive_svc, anon_pres_id, to_add, named=False, image_cache=image_cache, seed=seed)
 
         # Update processed IDs
         for sub in new_submissions:

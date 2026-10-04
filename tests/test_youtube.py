@@ -14,15 +14,13 @@ os.environ.setdefault("DISCORD_RESULTS_CHANNEL_ID", "2")
 os.environ.setdefault("TEMPLATE_DECK_ID", "tpl")
 
 from weekly_slides_bot import (
-    _AUTHOR_BAR_PT,
-    _IMG_MARGIN_PT,
     _PT,
-    _SLIDE_H_PT,
-    _SLIDE_W_PT,
-    _TEXT_SPLIT_PT,
+    _VIDEO_ASPECT,
+    Box,
     _video_requests,
     extract_youtube_ids,
     generate_slides,
+    plan_slide_layout,
     strip_youtube_urls,
 )
 
@@ -96,88 +94,36 @@ class TestStripYoutubeUrls:
 # ---------------------------------------------------------------------------
 
 
-class TestVideoRequestsEmpty:
+class TestVideoRequests:
+    _BOX = Box(100, 120, 480, 270)
+
     def test_no_ids_returns_empty(self):
-        assert _video_requests(_SLIDE_ID, []) == []
-
-
-class TestVideoRequestsHasText:
-    """Video must stay within the right portion of the slide when text is present."""
-
-    def _reqs(self, ids: list[str] | None = None) -> list[dict]:
-        return _video_requests(_SLIDE_ID, ids or ["dQw4w9WgXcQ"], has_text=True)
-
-    def test_returns_single_request(self):
-        assert len(self._reqs()) == 1
+        assert _video_requests(_SLIDE_ID, [], self._BOX) == []
 
     def test_only_first_video_embedded(self):
-        reqs = _video_requests(_SLIDE_ID, ["id1", "id2"], has_text=True)
+        reqs = _video_requests(_SLIDE_ID, ["id1", "id2"], self._BOX)
         assert len(reqs) == 1
         assert reqs[0]["createVideo"]["id"] == "id1"
+        assert reqs[0]["createVideo"]["source"] == "YOUTUBE"
 
-    def test_source_is_youtube(self):
-        assert self._reqs()[0]["createVideo"]["source"] == "YOUTUBE"
-
-    def test_video_id_matches(self):
-        assert self._reqs(["abc123_DEF0"])[0]["createVideo"]["id"] == "abc123_DEF0"
-
-    def test_slide_id_set(self):
-        props = self._reqs()[0]["createVideo"]["elementProperties"]
+    def test_placed_in_its_box(self):
+        props = _video_requests(_SLIDE_ID, ["abc123_DEF0"], self._BOX)[0]["createVideo"]["elementProperties"]
         assert props["pageObjectId"] == _SLIDE_ID
-
-    def test_video_starts_in_right_half(self):
-        props = self._reqs()[0]["createVideo"]["elementProperties"]
-        translate_x_pt = props["transform"]["translateX"] // _PT
-        assert translate_x_pt >= _TEXT_SPLIT_PT
-
-    def test_video_within_slide_width(self):
-        props = self._reqs()[0]["createVideo"]["elementProperties"]
-        left_pt = props["transform"]["translateX"] // _PT
-        w_pt = props["size"]["width"]["magnitude"] // _PT
-        assert left_pt + w_pt <= _SLIDE_W_PT
-
-    def test_video_within_slide_height(self):
-        props = self._reqs()[0]["createVideo"]["elementProperties"]
-        top_pt = props["transform"]["translateY"] // _PT
-        h_pt = props["size"]["height"]["magnitude"] // _PT
-        assert top_pt + h_pt <= _SLIDE_H_PT
+        assert props["transform"]["translateX"] == 100 * _PT
+        assert props["transform"]["translateY"] == 120 * _PT
+        assert props["size"]["width"]["magnitude"] == 480 * _PT
+        assert props["size"]["height"]["magnitude"] == 270 * _PT
 
 
-class TestVideoRequestsNoText:
-    """Video-only submissions must use the full available slide area."""
+class TestVideoLayout:
+    """Videos are planned as 16:9 media, beside or below any text."""
 
-    def _reqs(self) -> list[dict]:
-        return _video_requests(_SLIDE_ID, ["dQw4w9WgXcQ"], has_text=False)
-
-    def test_starts_at_left_margin(self):
-        props = self._reqs()[0]["createVideo"]["elementProperties"]
-        translate_x_pt = props["transform"]["translateX"] // _PT
-        assert translate_x_pt == _IMG_MARGIN_PT
-
-    def test_starts_at_author_bar_y(self):
-        props = self._reqs()[0]["createVideo"]["elementProperties"]
-        top_pt = props["transform"]["translateY"] // _PT
-        assert top_pt == _AUTHOR_BAR_PT
-
-    def test_video_within_slide_width(self):
-        props = self._reqs()[0]["createVideo"]["elementProperties"]
-        left_pt = props["transform"]["translateX"] // _PT
-        w_pt = props["size"]["width"]["magnitude"] // _PT
-        assert left_pt + w_pt <= _SLIDE_W_PT
-
-    def test_video_within_slide_height(self):
-        props = self._reqs()[0]["createVideo"]["elementProperties"]
-        top_pt = props["transform"]["translateY"] // _PT
-        h_pt = props["size"]["height"]["magnitude"] // _PT
-        assert top_pt + h_pt <= _SLIDE_H_PT
-
-    def test_no_text_wider_than_has_text(self):
-        """Video-only should be wider than text+video layout."""
-        no_text = _video_requests(_SLIDE_ID, ["id1"], has_text=False)[0]
-        has_text = _video_requests(_SLIDE_ID, ["id1"], has_text=True)[0]
-        w_no = no_text["createVideo"]["elementProperties"]["size"]["width"]["magnitude"]
-        w_yes = has_text["createVideo"]["elementProperties"]["size"]["width"]["magnitude"]
-        assert w_no > w_yes
+    @pytest.mark.parametrize("text", ["", "This song - it lives in my head rent free"])
+    def test_video_box_is_16_by_9(self, text):
+        layout = plan_slide_layout(960, 540, 94, text, [_VIDEO_ASPECT])
+        (box,) = layout.media_boxes
+        assert box.w / box.h == pytest.approx(16 / 9)
+        assert box.x + box.w <= 960 and box.y + box.h <= 540
 
 
 # ---------------------------------------------------------------------------

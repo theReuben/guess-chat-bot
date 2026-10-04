@@ -14,7 +14,6 @@ import random
 
 from weekly_slides_bot import (
     _AUTHOR_BAR_PT,
-    _IMG_MARGIN_PT,
     _PT,
     _SLIDE_H_PT,
     _SLIDE_W_PT,

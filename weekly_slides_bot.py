@@ -22,8 +22,9 @@ import ssl
 import time
 import traceback
 import zoneinfo
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import discord
 import requests
@@ -33,6 +34,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseUpload
+from PIL import Image, UnidentifiedImageError
 
 # ---------------------------------------------------------------------------
 # Configuration from environment
@@ -92,10 +94,14 @@ SUBMISSION_PREFIX = "SUBMISSION"
 
 # Regexes that tolerate leading markdown formatting (headings, bold, italic).
 # Examples matched by _MARKER_LINE_RE: "GUESS CHAT Topic", "# GUESS CHAT Topic"
-# Examples matched by _SUBMISSION_RE: "SUBMISSION answer", "**SUBMISSION** answer"
+# Examples matched by _SUBMISSION_RE: "SUBMISSION answer", "**SUBMISSION** answer",
+# "SUBMISSION: answer", "**SUBMISSION:** answer" (the separator is dropped; a
+# dash only counts as one when followed by a space, so "-1" keeps its sign)
 _MD_PREFIX_RE = re.compile(r"^[#*_ \t]+")
 _MARKER_LINE_RE = re.compile(r"^[#*_ \t]*(GUESS\s+CHAT)\b\s*(.*)", re.IGNORECASE)
-_SUBMISSION_RE = re.compile(r"^[#*_ \t]*(SUBMISSION)\b[*_]*\s*(.*)", re.IGNORECASE | re.DOTALL)
+_SUBMISSION_RE = re.compile(
+    r"^[#*_ \t]*(SUBMISSION)\b[*_]*\s*(?:[:–—][*_]*\s*|-[*_]*\s+)?(.*)", re.IGNORECASE | re.DOTALL
+)
 _URL_RE = re.compile(r"https?://[^\s<>\"]+")
 
 # YouTube URL pattern – matches standard, short, and embed URLs.
@@ -556,8 +562,39 @@ def _resolve_mod_mention(guild: discord.Guild | None) -> str:
 # ---------------------------------------------------------------------------
 
 
-def upload_image_to_drive(drive_svc, url: str, cache: dict[str, str]) -> str | None:
-    """Download image from *url* and upload to Drive; returns a public URL."""
+class UploadedImage(NamedTuple):
+    url: str        # public Drive URL the Slides API can fetch
+    aspect: float   # width / height, for laying the image out
+
+
+# EXIF orientations that rotate the picture a quarter turn.
+_QUARTER_TURN_ORIENTATIONS = (5, 6, 7, 8)
+
+
+def _image_aspect(data: bytes) -> float:
+    """Return the width/height ratio of an image, as it will be displayed.
+
+    Falls back to square for anything Pillow can't read, which still lays
+    out sensibly.
+    """
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            w, h = img.size
+            if img.getexif().get(0x0112) in _QUARTER_TURN_ORIENTATIONS:
+                w, h = h, w
+    except (UnidentifiedImageError, OSError, ValueError):
+        return 1.0
+    return w / h if w and h else 1.0
+
+
+def upload_image_to_drive(
+    drive_svc, url: str, cache: dict[str, UploadedImage]
+) -> UploadedImage | None:
+    """Download image from *url* and upload it to Drive.
+
+    Returns its public URL and aspect ratio, or ``None`` if it couldn't be
+    downloaded or uploaded.
+    """
     if url in cache:
         return cache[url]
     try:
@@ -591,99 +628,336 @@ def upload_image_to_drive(drive_svc, url: str, cache: dict[str, str]) -> str | N
         )
     )
 
-    public_url = f"https://lh3.googleusercontent.com/d/{file_id}"
-    cache[url] = public_url
-    return public_url
+    uploaded = UploadedImage(
+        f"https://lh3.googleusercontent.com/d/{file_id}", _image_aspect(resp.content)
+    )
+    cache[url] = uploaded
+    return uploaded
 
 
 # ---------------------------------------------------------------------------
-# Image grid layout
+# Slide layout
 # ---------------------------------------------------------------------------
 
-# Image layout constants (all in points; multiply by _PT to get EMU)
+# Layout constants (all in points; multiply by _PT to get EMU)
 _PT = 12700          # EMU per point
-_SLIDE_W_PT = 720    # standard 16:9 slide width in points
-_SLIDE_H_PT = 405    # standard 16:9 slide height in points
-_IMG_MARGIN_PT = 24  # slide edge margin used for image placement
+_SLIDE_W_PT = 720    # fallback page size when a deck doesn't report one
+_SLIDE_H_PT = 405
+_MARGIN_PT = 24      # slide edge margin
+_GAP_PT = 12         # gap between text and media, and between media items
 _AUTHOR_BAR_PT = 55  # height reserved for the author label at the top
+_AUTHOR_GAP_PT = 6   # gap between the author label and the content below it
 _BODY_Y_TOLERANCE_PT = 5  # tolerance when matching the body element Y position
-_TEXT_SPLIT_PT = 390  # x-coordinate where images/videos start when text is present
-_TEXT_IMG_GAP_PT = 10  # gap between text area right edge and image area left edge
+
+_MIN_FONT_PT = 10
+_MAX_FONT_PT = 54
+# Text larger than this reads comfortably on stream, so a layout gains
+# nothing by giving the text more room beyond it.
+_READABLE_FONT_PT = 28
+# How much a readable font is worth against media coverage when choosing
+# where to split a slide (coverage is a 0–1 fraction of the content area).
+_TEXT_WEIGHT = 0.5
+# Wrapping a line mid-way ("Penguin - Mario / Kart World") reads worse than
+# slightly smaller text; a whole-line font size is used when it is at least
+# this fraction of the largest wrapped size, and wrapping costs this factor
+# in a layout's text score.
+_WHOLE_LINE_MIN_RATIO = 0.75
+_WRAP_PENALTY = 0.6
+_TEXT_INSET_PT = 7.2  # Slides' default text box padding on each side
+_LINE_HEIGHT = 1.2    # line height as a multiple of font size at 100% spacing
+_VIDEO_ASPECT = 16 / 9
+
+# Candidate splits between text and media, as a fraction of the content area
+# given to the text: side by side (text left) and stacked (text on top).
+_SIDE_SPLITS = (0.25, 0.33, 0.4, 0.5, 0.6)
+_STACK_SPLITS = (0.15, 0.25, 0.35, 0.5)
 
 
-def _image_requests(slide_id: str, image_urls: list[str], has_text: bool = True) -> list[dict]:
-    """Return createImage requests for up to 4 images in a 1–2 column grid.
+@dataclass(frozen=True)
+class Box:
+    """A rectangle on the slide, in points."""
 
-    When *has_text* is True the images are placed in the right portion of the
-    slide to leave room for the body text on the left.  When *has_text* is
-    False (image-only submission) the images fill the full available slide area.
+    x: float
+    y: float
+    w: float
+    h: float
+
+    def swapped(self) -> "Box":
+        return Box(self.y, self.x, self.h, self.w)
+
+
+@dataclass(frozen=True)
+class SlideLayout:
+    text_box: Box
+    font_pt: float
+    media_boxes: list[Box]
+    # Short text spanning the slide is centred over the centred media; text
+    # that wraps, or sits in a column beside the media, stays left-aligned.
+    centred: bool = False
+
+
+def _page_size_pt(pres: dict) -> tuple[float, float]:
+    """Return the deck's page width and height in points."""
+    size = pres.get("pageSize") or {}
+    w = size.get("width", {}).get("magnitude")
+    h = size.get("height", {}).get("magnitude")
+    if not (w and h):
+        return _SLIDE_W_PT, _SLIDE_H_PT
+    return w / _PT, h / _PT
+
+
+# Approximate Arial glyph widths in ems, enough to estimate line wrapping.
+_NARROW_CHARS = frozenset("iljtfrI.,:;'!|()[]{} \"")
+_WIDE_CHARS = frozenset("mwMW@%")
+
+
+def _char_width_em(ch: str) -> float:
+    if ch in _NARROW_CHARS:
+        return 0.3
+    if ch in _WIDE_CHARS:
+        return 0.85
+    if ch.isupper():
+        return 0.68
+    if ch.isdigit():
+        return 0.56
+    if ord(ch) < 0x2E80:
+        return 0.52
+    return 1.0  # CJK, emoji
+
+
+def _text_width_em(text: str) -> float:
+    return sum(_char_width_em(ch) for ch in text)
+
+
+def _line_count(text: str, max_em: float) -> int:
+    """Return how many lines *text* wraps to in a box *max_em* ems wide."""
+    space = _char_width_em(" ")
+    lines = 0
+    for paragraph in text.split("\n"):
+        lines += 1
+        width = 0.0
+        for word in paragraph.split(" "):
+            word_w = _text_width_em(word)
+            if width and width + space + word_w > max_em:
+                lines += 1
+                width = 0.0
+            elif width:
+                width += space
+            # A word longer than a line breaks mid-word.
+            while word_w > max_em:
+                lines += 1
+                word_w -= max_em
+            width += word_w
+    return lines
+
+
+def _fit_text(text: str, box_w: float, box_h: float) -> tuple[float, bool]:
+    """Return a font size at which *text* fits the box, and whether it wraps.
+
+    Prefers the largest size at which every line fits whole, unless wrapping
+    allows a much larger one.
     """
-    urls = image_urls[:4]
-    if not urls:
-        return []
+    usable_w = box_w - 2 * _TEXT_INSET_PT
+    usable_h = box_h - 2 * _TEXT_INSET_PT
+    if not text.strip():
+        return _MAX_FONT_PT, False
+    paragraphs = text.count("\n") + 1
+    largest: float | None = None
+    for font in range(_MAX_FONT_PT, _MIN_FONT_PT - 1, -1):
+        lines = _line_count(text, usable_w / font)
+        if lines * font * _LINE_HEIGHT > usable_h:
+            continue
+        if largest is None:
+            largest = font
+        if lines == paragraphs:
+            if font >= largest * _WHOLE_LINE_MIN_RATIO:
+                return font, False
+            break
+    return (largest if largest is not None else _MIN_FONT_PT), True
 
-    n_cols = min(len(urls), 2)
-    n_rows = (len(urls) + n_cols - 1) // n_cols
-    gap = 8  # points between images
 
-    if has_text:
-        area_x = _TEXT_SPLIT_PT
-        area_y = _AUTHOR_BAR_PT
-        area_w = _SLIDE_W_PT - area_x - _IMG_MARGIN_PT
-        area_h = _SLIDE_H_PT - area_y - _IMG_MARGIN_PT
-    else:
-        area_x = _IMG_MARGIN_PT
-        area_y = _AUTHOR_BAR_PT
-        area_w = _SLIDE_W_PT - 2 * _IMG_MARGIN_PT
-        area_h = _SLIDE_H_PT - area_y - _IMG_MARGIN_PT
+def _row_splits(n: int) -> list[list[int]]:
+    """Return every way to split *n* items, in order, into rows."""
+    if n == 0:
+        return [[]]
+    return [[k] + rest for k in range(1, n + 1) for rest in _row_splits(n - k)]
 
-    img_w = (area_w - gap * (n_cols - 1)) // n_cols
-    img_h = (area_h - gap * (n_rows - 1)) // n_rows
 
-    boxes = [
-        (area_x + (idx % n_cols) * (img_w + gap), area_y + (idx // n_cols) * (img_h + gap), img_w, img_h)
-        for idx in range(len(urls))
-    ]
-    if len(urls) == 3:
-        # A 2×2 grid would leave a hole; give the first image a full half of
-        # the area instead, split along the longer side.
-        if area_w >= area_h:
-            boxes = [
-                (area_x, area_y, img_w, area_h),
-                (area_x + img_w + gap, area_y, img_w, img_h),
-                (area_x + img_w + gap, area_y + img_h + gap, img_w, img_h),
-            ]
-        else:
-            boxes = [
-                (area_x, area_y, area_w, img_h),
-                (area_x, area_y + img_h + gap, img_w, img_h),
-                (area_x + img_w + gap, area_y + img_h + gap, img_w, img_h),
-            ]
+def _justified_rows(aspects: list[float], rows: list[int], area: Box) -> list[Box]:
+    """Lay items out in rows of equal-height items, centred in *area*.
 
-    requests_list = []
-    for img_url, (left, top, box_w, box_h) in zip(urls, boxes):
-        requests_list.append(
-            {
-                "createImage": {
-                    "url": img_url,
-                    "elementProperties": {
-                        "pageObjectId": slide_id,
-                        "size": {
-                            "width": {"magnitude": box_w * _PT, "unit": "EMU"},
-                            "height": {"magnitude": box_h * _PT, "unit": "EMU"},
-                        },
-                        "transform": {
-                            "scaleX": 1,
-                            "scaleY": 1,
-                            "translateX": left * _PT,
-                            "translateY": top * _PT,
-                            "unit": "EMU",
-                        },
-                    },
-                }
+    Each row is scaled to span the full width; if the rows are then too tall
+    in total, everything shrinks to fit the height.
+    """
+    groups, start = [], 0
+    for count in rows:
+        groups.append(aspects[start:start + count])
+        start += count
+
+    heights = [(area.w - _GAP_PT * (len(g) - 1)) / sum(g) for g in groups]
+    gaps_h = _GAP_PT * (len(groups) - 1)
+    if sum(heights) + gaps_h > area.h:
+        scale = (area.h - gaps_h) / sum(heights)
+        heights = [h * scale for h in heights]
+
+    boxes = []
+    y = area.y + (area.h - sum(heights) - gaps_h) / 2
+    for group, h in zip(groups, heights):
+        row_w = h * sum(group) + _GAP_PT * (len(group) - 1)
+        x = area.x + (area.w - row_w) / 2
+        for aspect in group:
+            boxes.append(Box(x, y, h * aspect, h))
+            x += h * aspect + _GAP_PT
+        y += h + _GAP_PT
+    return boxes
+
+
+def _arrange_media(aspects: list[float], area: Box) -> tuple[list[Box], float]:
+    """Pack media items (by width/height aspect) into *area*, keeping their shapes.
+
+    Tries every arrangement into rows and into columns and keeps the best,
+    judged by the sum of each item's side length (the square root of its
+    area).  That rewards covering the area but favours items of similar size
+    over one huge item beside tiny ones.  Returns the boxes, in item order,
+    and the area they cover.
+    """
+    if not aspects or area.w <= 0 or area.h <= 0:
+        return [], 0.0
+    best: tuple[list[Box], float] = ([], 0.0)
+    best_score = -1.0
+    for split in _row_splits(len(aspects)):
+        by_rows = _justified_rows(aspects, split, area)
+        by_cols = [
+            b.swapped()
+            for b in _justified_rows([1 / a for a in aspects], split, area.swapped())
+        ]
+        for boxes in (by_rows, by_cols):
+            if any(b.w <= 0 or b.h <= 0 for b in boxes):
+                continue
+            score = sum((b.w * b.h) ** 0.5 for b in boxes)
+            if score > best_score:
+                best_score = score
+                best = (boxes, sum(b.w * b.h for b in boxes))
+    return best
+
+
+def plan_slide_layout(
+    page_w: float,
+    page_h: float,
+    content_top: float,
+    body_text: str,
+    media_aspects: list[float],
+) -> SlideLayout:
+    """Decide where a submission's text and media go on the slide.
+
+    Text-only and media-only slides get the whole content area.  With both,
+    each candidate split (text beside or above the media) is scored on how
+    much of the area the media covers plus how readable the text is, and the
+    best one wins, so a short answer leaves most of the room to its pictures
+    and a long one claims what it needs.
+    """
+    area = Box(
+        _MARGIN_PT,
+        content_top,
+        page_w - 2 * _MARGIN_PT,
+        page_h - content_top - _MARGIN_PT,
+    )
+    if not media_aspects:
+        font, wraps = _fit_text(body_text, area.w, area.h)
+        return SlideLayout(area, font, [], centred=not wraps)
+    if not body_text.strip():
+        return SlideLayout(area, _MAX_FONT_PT, _arrange_media(media_aspects, area)[0])
+
+    candidates = []
+    for frac in _SIDE_SPLITS:
+        text_w = area.w * frac
+        candidates.append((
+            Box(area.x, area.y, text_w, area.h),
+            Box(area.x + text_w + _GAP_PT, area.y, area.w - text_w - _GAP_PT, area.h),
+        ))
+    for frac in _STACK_SPLITS:
+        text_h = area.h * frac
+        candidates.append((
+            Box(area.x, area.y, area.w, text_h),
+            Box(area.x, area.y + text_h + _GAP_PT, area.w, area.h - text_h - _GAP_PT),
+        ))
+
+    best: tuple[float, SlideLayout] | None = None
+    for text_box, media_area in candidates:
+        font, wraps = _fit_text(body_text, text_box.w, text_box.h)
+        boxes, covered = _arrange_media(media_aspects, media_area)
+        readability = min(font, _READABLE_FONT_PT) / _READABLE_FONT_PT
+        if wraps:
+            readability *= _WRAP_PENALTY
+        score = covered / (area.w * area.h) + _TEXT_WEIGHT * readability
+        if best is None or score > best[0]:
+            centred = text_box.w == area.w and not wraps
+            best = (score, SlideLayout(text_box, font, boxes, centred))
+    return best[1]
+
+
+def _element_box_requests(object_id: str, elem: dict, box: Box) -> dict:
+    """Return a request moving and scaling *elem* to fill *box*."""
+    return {
+        "updatePageElementTransform": {
+            "objectId": object_id,
+            "transform": {
+                "scaleX": box.w * _PT / elem["size"]["width"]["magnitude"],
+                "scaleY": box.h * _PT / elem["size"]["height"]["magnitude"],
+                "shearX": 0,
+                "shearY": 0,
+                "translateX": box.x * _PT,
+                "translateY": box.y * _PT,
+                "unit": "EMU",
+            },
+            "applyMode": "ABSOLUTE",
+        }
+    }
+
+
+def _media_element_properties(slide_id: str, box: Box) -> dict:
+    return {
+        "pageObjectId": slide_id,
+        "size": {
+            "width": {"magnitude": box.w * _PT, "unit": "EMU"},
+            "height": {"magnitude": box.h * _PT, "unit": "EMU"},
+        },
+        "transform": {
+            "scaleX": 1,
+            "scaleY": 1,
+            "translateX": box.x * _PT,
+            "translateY": box.y * _PT,
+            "unit": "EMU",
+        },
+    }
+
+
+def _image_requests(slide_id: str, image_urls: list[str], boxes: list[Box]) -> list[dict]:
+    """Return createImage requests placing each image in its planned box."""
+    return [
+        {
+            "createImage": {
+                "url": url,
+                "elementProperties": _media_element_properties(slide_id, box),
             }
-        )
-    return requests_list
+        }
+        for url, box in zip(image_urls, boxes)
+    ]
+
+
+def _video_requests(slide_id: str, video_ids: list[str], box: Box) -> list[dict]:
+    """Return a createVideo request for the first YouTube video."""
+    if not video_ids:
+        return []
+    return [
+        {
+            "createVideo": {
+                "source": "YOUTUBE",
+                "id": video_ids[0],
+                "elementProperties": _media_element_properties(slide_id, box),
+            }
+        }
+    ]
 
 
 def _insert_images(
@@ -691,7 +965,7 @@ def _insert_images(
     pres_id: str,
     slide_id: str,
     drive_urls: list[str],
-    has_text: bool,
+    boxes: list[Box],
     author: str,
 ) -> list[str]:
     """Insert images into a slide, falling back to per-image insertion on failure.
@@ -699,7 +973,7 @@ def _insert_images(
     Returns a list of error description strings (empty if all images inserted
     successfully).
     """
-    reqs = _image_requests(slide_id, drive_urls, has_text=has_text)
+    reqs = _image_requests(slide_id, drive_urls, boxes)
     if not reqs:
         return []
 
@@ -866,56 +1140,22 @@ def _author_bottom_emu(page_elements: list[dict]) -> int:
     return int(max(bottom, _AUTHOR_BAR_PT * _PT))
 
 
-def _body_resize_requests(page_elements: list[dict], has_images: bool) -> list[dict]:
-    """Return batchUpdate requests to reposition and resize the body text box.
+def _body_resize_requests(page_elements: list[dict], box: Box) -> list[dict]:
+    """Return requests moving the body text box to *box* and centring its text.
 
-    The body text box is placed just below the author element's actual bottom
-    edge (with a small gap) and sized to fill the remaining slide area.  When
-    *has_images* is True the box is constrained to the left portion so that it
-    does not overlap with images on the right.
-
-    Content alignment is set to TOP so text anchors to the top of the box and
-    any overflow extends downward rather than into the author bar.
+    The text is centred vertically so a short answer sits in the middle of
+    its space rather than clinging to the top.
     """
     elem = _find_body_element(page_elements)
     if elem is None:
         return []
-
-    gap = 6 * _PT  # 6pt gap between author and body
-    author_bottom = _author_bottom_emu(page_elements)
-    area_x = _IMG_MARGIN_PT * _PT
-    area_y = author_bottom + gap
-    area_h = _SLIDE_H_PT * _PT - area_y - _IMG_MARGIN_PT * _PT
-
-    if has_images:
-        area_w = (_TEXT_SPLIT_PT - _TEXT_IMG_GAP_PT - _IMG_MARGIN_PT) * _PT
-    else:
-        area_w = (_SLIDE_W_PT - 2 * _IMG_MARGIN_PT) * _PT
-
-    elem_w = elem["size"]["width"]["magnitude"]
-    elem_h = elem["size"]["height"]["magnitude"]
-
     return [
-        {
-            "updatePageElementTransform": {
-                "objectId": elem["objectId"],
-                "transform": {
-                    "scaleX": area_w / elem_w,
-                    "scaleY": area_h / elem_h,
-                    "shearX": 0,
-                    "shearY": 0,
-                    "translateX": area_x,
-                    "translateY": area_y,
-                    "unit": "EMU",
-                },
-                "applyMode": "ABSOLUTE",
-            }
-        },
+        _element_box_requests(elem["objectId"], elem, box),
         {
             "updateShapeProperties": {
                 "objectId": elem["objectId"],
                 "shapeProperties": {
-                    "contentAlignment": "TOP",
+                    "contentAlignment": "MIDDLE",
                 },
                 "fields": "contentAlignment",
             }
@@ -923,56 +1163,12 @@ def _body_resize_requests(page_elements: list[dict], has_images: bool) -> list[d
     ]
 
 
-_DEFAULT_FONT_PT = 18   # base font size for short body text
-_MIN_FONT_PT = 8        # never go smaller than this
+def _text_fit_requests(element_id: str, font_pt: float, centred: bool = False) -> list[dict]:
+    """Return requests setting the body font size and paragraph alignment.
 
-
-def _body_font_size_pt(body_text: str, has_images: bool) -> float:
-    """Choose a font size (in pt) so *body_text* fits the body text box.
-
-    Uses a simple heuristic: estimate how many characters fit on one line at
-    the given font size, compute the number of lines needed, and shrink the
-    font until the text fits the available height.  Explicit newlines in the
-    text count as line breaks.
+    The alignment is always set, because an appended slide is a copy of an
+    existing one and would otherwise inherit that slide's alignment.
     """
-    if not body_text:
-        return _DEFAULT_FONT_PT
-
-    if has_images:
-        box_w_pt = _TEXT_SPLIT_PT - _TEXT_IMG_GAP_PT - _IMG_MARGIN_PT  # ~356pt
-    else:
-        box_w_pt = _SLIDE_W_PT - 2 * _IMG_MARGIN_PT  # ~672pt
-
-    box_h_pt = _SLIDE_H_PT - _AUTHOR_BAR_PT - _IMG_MARGIN_PT  # ~326pt
-
-    font_size = _DEFAULT_FONT_PT
-
-    while font_size >= _MIN_FONT_PT:
-        # Average character width ≈ 0.55 × font size for proportional fonts
-        chars_per_line = max(1, int(box_w_pt / (font_size * 0.55)))
-        line_height = font_size * 1.3  # typical line spacing
-
-        # Count lines: wrap each paragraph independently
-        lines = 0
-        for paragraph in body_text.split("\n"):
-            if not paragraph.strip():
-                lines += 1  # blank line
-            else:
-                lines += max(1, -(-len(paragraph) // chars_per_line))  # ceil division
-
-        total_height = lines * line_height
-        if total_height <= box_h_pt:
-            break
-        font_size -= 1
-
-    return max(font_size, _MIN_FONT_PT)
-
-
-def _text_fit_requests(element_id: str, body_text: str, has_images: bool) -> list[dict]:
-    """Return updateTextStyle requests to scale body text to fit its box."""
-    font_size = _body_font_size_pt(body_text, has_images)
-    if font_size >= _DEFAULT_FONT_PT:
-        return []  # template default is fine
     return [
         {
             "updateTextStyle": {
@@ -980,13 +1176,21 @@ def _text_fit_requests(element_id: str, body_text: str, has_images: bool) -> lis
                 "textRange": {"type": "ALL"},
                 "style": {
                     "fontSize": {
-                        "magnitude": font_size,
+                        "magnitude": font_pt,
                         "unit": "PT",
                     }
                 },
                 "fields": "fontSize",
             }
-        }
+        },
+        {
+            "updateParagraphStyle": {
+                "objectId": element_id,
+                "textRange": {"type": "ALL"},
+                "style": {"alignment": "CENTER" if centred else "START"},
+                "fields": "alignment",
+            }
+        },
     ]
 
 
@@ -1041,57 +1245,6 @@ def strip_youtube_urls(text: str) -> str:
     # Collapse whitespace left behind but preserve intentional newlines
     cleaned = re.sub(r"[ \t]+", " ", cleaned)
     return cleaned.strip()
-
-
-def _video_requests(
-    slide_id: str,
-    video_ids: list[str],
-    has_text: bool = True,
-) -> list[dict]:
-    """Return createVideo requests for YouTube videos on a slide.
-
-    Layout mirrors ``_image_requests``: videos are placed in the right
-    portion when *has_text* is True and use the full available area
-    when *has_text* is False.  Only the first video is embedded.
-    """
-    if not video_ids:
-        return []
-
-    vid = video_ids[0]
-
-    if has_text:
-        area_x = _TEXT_SPLIT_PT
-        area_y = _AUTHOR_BAR_PT
-        area_w = _SLIDE_W_PT - area_x - _IMG_MARGIN_PT
-        area_h = _SLIDE_H_PT - area_y - _IMG_MARGIN_PT
-    else:
-        area_x = _IMG_MARGIN_PT
-        area_y = _AUTHOR_BAR_PT
-        area_w = _SLIDE_W_PT - 2 * _IMG_MARGIN_PT
-        area_h = _SLIDE_H_PT - area_y - _IMG_MARGIN_PT
-
-    return [
-        {
-            "createVideo": {
-                "source": "YOUTUBE",
-                "id": vid,
-                "elementProperties": {
-                    "pageObjectId": slide_id,
-                    "size": {
-                        "width": {"magnitude": area_w * _PT, "unit": "EMU"},
-                        "height": {"magnitude": area_h * _PT, "unit": "EMU"},
-                    },
-                    "transform": {
-                        "scaleX": 1,
-                        "scaleY": 1,
-                        "translateX": area_x * _PT,
-                        "translateY": area_y * _PT,
-                        "unit": "EMU",
-                    },
-                },
-            }
-        }
-    ]
 
 
 # ---------------------------------------------------------------------------
@@ -1201,6 +1354,87 @@ def _find_template_slide_id(slides_svc, pres_id: str) -> str:
     raise RuntimeError("Could not find template slide ({{AUTHOR}} placeholder) in deck")
 
 
+def _lay_out_submission(
+    slides_svc,
+    drive_svc,
+    pres_id: str,
+    slide_id: str,
+    page_elements: list[dict],
+    page_size: tuple[float, float],
+    sub: dict,
+    image_cache: dict[str, UploadedImage],
+    err_meta: dict,
+) -> list[dict]:
+    """Size and place a submission slide's body text and media.
+
+    Images are uploaded first because their shapes decide the layout.  The
+    slide's text must already be in place.  Returns error dicts for any
+    processing problems.
+    """
+    errors: list[dict] = []
+    author = sub["author"]
+    body_text = sub["body"]
+    image_urls = sub.get("images", [])[:4]
+    youtube_ids = sub.get("youtube_ids", [])
+
+    uploaded: list[UploadedImage] = []
+    if image_urls:
+        results = [upload_image_to_drive(drive_svc, u, image_cache) for u in image_urls]
+        failed_uploads = sum(1 for r in results if r is None)
+        if failed_uploads:
+            errors.append({
+                "author": author,
+                "issue": f"Failed to upload {failed_uploads} image(s) to Google Drive",
+                **err_meta,
+            })
+        uploaded = [r for r in results if r is not None]
+    # Embed a YouTube video only when there are no image attachments
+    video_ids = youtube_ids if not image_urls else []
+    aspects = [img.aspect for img in uploaded] or ([_VIDEO_ASPECT] if video_ids else [])
+
+    content_top = _author_bottom_emu(page_elements) / _PT + _AUTHOR_GAP_PT
+    layout = plan_slide_layout(*page_size, content_top, body_text, aspects)
+
+    text_reqs = _body_resize_requests(page_elements, layout.text_box)
+    body_elem = _find_body_element(page_elements)
+    if body_elem and body_text:
+        text_reqs.extend(_text_fit_requests(body_elem["objectId"], layout.font_pt, layout.centred))
+        if _URL_RE.search(body_text):
+            text_reqs.extend(_hyperlink_requests(body_elem["objectId"], body_text))
+    if text_reqs:
+        execute_with_retry(
+            slides_svc.presentations().batchUpdate(
+                presentationId=pres_id,
+                body={"requests": text_reqs},
+            )
+        )
+
+    if uploaded:
+        img_errors = _insert_images(
+            slides_svc, pres_id, slide_id, [img.url for img in uploaded],
+            layout.media_boxes, author=author,
+        )
+        for detail in img_errors:
+            errors.append({
+                "author": author,
+                "issue": f"Could not insert image(s) into slide: {detail}",
+                **err_meta,
+            })
+
+    if video_ids and layout.media_boxes:
+        try:
+            execute_with_retry(
+                slides_svc.presentations().batchUpdate(
+                    presentationId=pres_id,
+                    body={"requests": _video_requests(slide_id, video_ids, layout.media_boxes[0])},
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warn] Could not embed YouTube video for '{author}': {str(exc) or repr(exc)}")
+
+    return errors
+
+
 def build_deck(
     slides_svc,
     drive_svc,
@@ -1254,8 +1488,6 @@ def build_deck(
     for i, sub in enumerate(submissions):
         author = sub["author"]
         body_text = sub["body"]
-        image_urls = sub.get("images", [])
-        youtube_ids = sub.get("youtube_ids", [])
 
         # Duplicate the template slide
         dup_resp = execute_with_retry(
@@ -1302,80 +1534,22 @@ def build_deck(
             )
         )
 
-        # Post-processing: resize body text box and add hyperlinks for URLs.
-        # The body is always resized: constrained to the left when media is
-        # present, or expanded to fill the slide when text-only.
-        has_media = bool(image_urls) or bool(youtube_ids)
-        has_urls = bool(_URL_RE.search(body_text))
         new_pres = execute_with_retry(
             slides_svc.presentations().get(presentationId=pres_id)
         )
         new_slide = next(
             s for s in new_pres["slides"] if s["objectId"] == new_slide_id
         )
-        page_elements = new_slide.get("pageElements", [])
-        post_reqs: list[dict] = []
-        post_reqs.extend(_body_resize_requests(page_elements, has_media))
-        body_elem = _find_body_element(page_elements)
-        if body_elem:
-            post_reqs.extend(
-                _text_fit_requests(body_elem["objectId"], body_text, has_media)
-            )
-            if has_urls:
-                post_reqs.extend(
-                    _hyperlink_requests(body_elem["objectId"], body_text)
-                )
-        if post_reqs:
-            execute_with_retry(
-                slides_svc.presentations().batchUpdate(
-                    presentationId=pres_id,
-                    body={"requests": post_reqs},
-                )
-            )
-
-        # Insert images
-        if image_urls:
+        errors.extend(_lay_out_submission(
+            slides_svc, drive_svc, pres_id, new_slide_id,
+            new_slide.get("pageElements", []), _page_size_pt(new_pres), sub, image_cache,
             # Final slide number (1-indexed) once the template slide is removed
-            err_meta = {
+            err_meta={
                 "slide_number": template_index + i + 1,
                 "slide_id": new_slide_id,
                 "message_id": sub.get("id", ""),
-            }
-            drive_urls_raw = [
-                upload_image_to_drive(drive_svc, u, image_cache)
-                for u in image_urls[:4]
-            ]
-            failed_uploads = sum(1 for u in drive_urls_raw if u is None)
-            if failed_uploads:
-                errors.append({
-                    "author": author,
-                    "issue": f"Failed to upload {failed_uploads} image(s) to Google Drive",
-                    **err_meta,
-                })
-            drive_urls = [u for u in drive_urls_raw if u]
-            if drive_urls:
-                img_errors = _insert_images(
-                    slides_svc, pres_id, new_slide_id, drive_urls,
-                    has_text=bool(body_text), author=author,
-                )
-                for detail in img_errors:
-                    errors.append({
-                        "author": author,
-                        "issue": f"Could not insert image(s) into slide: {detail}",
-                        **err_meta,
-                    })
-
-        # Embed YouTube video (only when no image attachments to avoid overlap)
-        if youtube_ids and not image_urls:
-            try:
-                execute_with_retry(
-                    slides_svc.presentations().batchUpdate(
-                        presentationId=pres_id,
-                        body={"requests": _video_requests(new_slide_id, youtube_ids, has_text=bool(body_text))},
-                    )
-                )
-            except Exception as exc:  # noqa: BLE001
-                print(f"[warn] Could not embed YouTube video for '{author}': {str(exc) or repr(exc)}")
+            },
+        ))
 
     # Delete the original template slide
     execute_with_retry(
@@ -1424,12 +1598,11 @@ def append_slides(
 
     # Use the second-to-last slide as the duplication source
     source_slide_id = slides[-2]["objectId"]
+    page_size = _page_size_pt(pres)
 
     for i, sub in enumerate(new_submissions):
         author = sub["author"]
         body_text = sub["body"]
-        image_urls = sub.get("images", [])
-        youtube_ids = sub.get("youtube_ids", [])
 
         # Duplicate an existing submission slide
         dup_resp = execute_with_retry(
@@ -1504,15 +1677,11 @@ def append_slides(
                 clear_requests.append(
                     {"deleteObject": {"objectId": elem["objectId"]}}
                 )
-        has_media = bool(image_urls) or bool(youtube_ids)
-        # Resize body text box for text-only submissions
-        resize_reqs = _body_resize_requests(page_elements, has_images=has_media)
-        all_clear_reqs = clear_requests + resize_reqs
-        if all_clear_reqs:
+        if clear_requests:
             execute_with_retry(
                 slides_svc.presentations().batchUpdate(
                     presentationId=pres_id,
-                    body={"requests": all_clear_reqs},
+                    body={"requests": clear_requests},
                 )
             )
 
@@ -1552,67 +1721,15 @@ def append_slides(
                 )
             )
 
-        # Scale body text to fit and add hyperlinks
-        if body_obj_id:
-            style_reqs: list[dict] = []
-            style_reqs.extend(
-                _text_fit_requests(body_obj_id, body_text, has_media)
-            )
-            has_urls = bool(_URL_RE.search(body_text))
-            if has_urls:
-                style_reqs.extend(
-                    _hyperlink_requests(body_obj_id, body_text)
-                )
-            if style_reqs:
-                execute_with_retry(
-                    slides_svc.presentations().batchUpdate(
-                        presentationId=pres_id,
-                        body={"requests": style_reqs},
-                    )
-                )
-
-        # Insert images
-        if image_urls:
-            err_meta = {
+        errors.extend(_lay_out_submission(
+            slides_svc, drive_svc, pres_id, new_slide_id, page_elements, page_size,
+            sub, image_cache,
+            err_meta={
                 "slide_number": target_index + 1,  # 1-indexed; corrected below
                 "slide_id": new_slide_id,
                 "message_id": sub.get("id", ""),
-            }
-            drive_urls_raw = [
-                upload_image_to_drive(drive_svc, u, image_cache)
-                for u in image_urls[:4]
-            ]
-            failed_uploads = sum(1 for u in drive_urls_raw if u is None)
-            if failed_uploads:
-                errors.append({
-                    "author": author,
-                    "issue": f"Failed to upload {failed_uploads} image(s) to Google Drive",
-                    **err_meta,
-                })
-            drive_urls = [u for u in drive_urls_raw if u]
-            if drive_urls:
-                img_errors = _insert_images(
-                    slides_svc, pres_id, new_slide_id, drive_urls,
-                    has_text=bool(body_text), author=author,
-                )
-                for detail in img_errors:
-                    errors.append({
-                        "author": author,
-                        "issue": f"Could not insert image(s) into slide: {detail}",
-                        **err_meta,
-                    })
-
-        # Embed YouTube video (only when no image attachments to avoid overlap)
-        if youtube_ids and not image_urls:
-            try:
-                execute_with_retry(
-                    slides_svc.presentations().batchUpdate(
-                        presentationId=pres_id,
-                        body={"requests": _video_requests(new_slide_id, youtube_ids, has_text=bool(body_text))},
-                    )
-                )
-            except Exception as exc:  # noqa: BLE001
-                print(f"[warn] Could not embed YouTube video for '{author}': {str(exc) or repr(exc)}")
+            },
+        ))
 
     slide_numbers = renumber_slides(slides_svc, pres_id, named)
     for err in errors:

@@ -26,7 +26,7 @@ from weekly_slides_bot import (
 # With seed=0 and one existing submission slide, the new slide's position
 # among the submission slides is drawn the same way append_slides draws it.
 EXPECTED_POSITION = 1 + random.Random(0).randint(0, 1)
-EXPECTED_NEW_LABEL = f"#{EXPECTED_POSITION} — NewUser"
+EXPECTED_NEW_LABEL = f"#{EXPECTED_POSITION} — Answer: NewUser"
 
 
 def _make_shape_element(obj_id: str, x_pt: float, y_pt: float, w_pt: float, h_pt: float, text: str | None = None):
@@ -200,7 +200,7 @@ class TestAppendSlidesUsesInsertText:
         all_requests = [req for batch in batch_calls for req in batch]
         insert_text_reqs = [r for r in all_requests if "insertText" in r]
         inserted_texts = {r["insertText"]["text"] for r in insert_text_reqs}
-        assert f"#{EXPECTED_POSITION}" in inserted_texts
+        assert f"#{EXPECTED_POSITION} — Answer:" in inserted_texts
         assert "My answer" in inserted_texts
 
 

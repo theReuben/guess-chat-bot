@@ -135,14 +135,17 @@ def _sub(i: int, author: str) -> dict:
 
 
 def test_named_label_carries_number_and_name():
-    assert format_author_label(7, "Sam", named=True) == "#7 — Sam"
+    assert format_author_label(7, "Sam", named=True) == "#7 — Answer: Sam"
 
 
-def test_anonymous_label_is_just_the_number():
-    assert format_author_label(7, "Sam", named=False) == "#7"
+def test_anonymous_label_leaves_the_answer_blank():
+    assert format_author_label(7, "Sam", named=False) == "#7 — Answer:"
 
 
 @pytest.mark.parametrize("text, name", [
+    ("#7 — Answer: Sam", "Sam"),
+    ("#7 — Answer:", ""),
+    ("#12 - Answer: Sam Smith", "Sam Smith"),
     ("#7 — Sam", "Sam"),
     ("#12 - Sam Smith", "Sam Smith"),
     ("#7", ""),
@@ -178,24 +181,24 @@ def test_collect_deck_authors_reads_numbered_and_legacy_labels():
 
 
 def test_renumber_rewrites_labels_in_deck_order():
-    deck = FakeDeck([("#3 — Cat", "c"), ("Answer: Dan", "d"), ("#1 — Amy", "a")])
+    deck = FakeDeck([("#3 — Cat", "c"), ("Answer: Dan", "d"), ("#1 — Answer: Amy", "a")])
     with patch("weekly_slides_bot.execute_with_retry", side_effect=lambda r: r.execute()):
         positions = renumber_slides(deck, "pres", named=True)
 
-    assert deck.labels() == ["#1 — Cat", "#2 — Dan", "#3 — Amy"]
+    assert deck.labels() == ["#1 — Answer: Cat", "#2 — Answer: Dan", "#3 — Answer: Amy"]
     assert positions["s0"] == 2  # 1-indexed position in the whole deck
 
 
 def test_renumber_anonymous_deck_drops_names():
-    deck = FakeDeck([("#2", "x"), ("Answer:", "y")])
+    deck = FakeDeck([("#2", "x"), ("Answer:", "y"), ("#1 — Answer:", "z")])
     with patch("weekly_slides_bot.execute_with_retry", side_effect=lambda r: r.execute()):
         renumber_slides(deck, "pres", named=False)
 
-    assert deck.labels() == ["#1", "#2"]
+    assert deck.labels() == ["#1 — Answer:", "#2 — Answer:", "#3 — Answer:"]
 
 
 def test_renumber_skips_the_api_call_when_nothing_changes():
-    deck = FakeDeck([("#1 — Amy", "a"), ("#2 — Ben", "b")])
+    deck = FakeDeck([("#1 — Answer: Amy", "a"), ("#2 — Answer: Ben", "b")])
     deck.batchUpdate = MagicMock()
     with patch("weekly_slides_bot.execute_with_retry", side_effect=lambda r: r.execute()):
         renumber_slides(deck, "pres", named=True)
@@ -219,6 +222,7 @@ def test_appended_slides_are_numbered_in_order_with_every_name_present():
 
     labels = deck.labels()
     assert [label.split(" — ")[0] for label in labels] == ["#1", "#2", "#3", "#4", "#5"]
+    assert all(" — Answer: " in label for label in labels)
     assert {parse_author_label(label) for label in labels} == {"Amy", "Ben", "Cat", "Dan", "Eve"}
     assert deck.slides[0]["objectId"] == "title" and deck.slides[-1]["objectId"] == "end"
 
@@ -233,7 +237,7 @@ def test_named_and_anonymous_decks_get_the_same_order():
     _append(anon, subs, named=False, seed=7)
 
     assert named.bodies() == anon.bodies()
-    assert anon.labels() == [f"#{n}" for n in range(1, 8)]
+    assert anon.labels() == [f"#{n} — Answer:" for n in range(1, 8)]
 
 
 def test_late_submissions_do_not_always_land_at_the_end():
@@ -300,3 +304,18 @@ async def test_new_round_builds_both_decks_from_one_shuffled_order():
     named_order = [s["author"] for s in build.call_args_list[0].args[4]]
     anon_order = [s["author"] for s in build.call_args_list[1].args[4]]
     assert named_order == anon_order == [f"User{i}" for i in reversed(range(6))]
+
+
+def test_collect_deck_authors_never_lists_the_answer_prompt_as_a_name():
+    deck = FakeDeck([("#1 — Answer:", "x"), ("#2 — Answer: Bo", "y")])
+    with patch("weekly_slides_bot.execute_with_retry", side_effect=lambda r: r.execute()):
+        assert collect_deck_authors(deck, "pres") == ["Bo"]
+
+
+def test_renumber_converts_the_interim_format():
+    """Decks built with "#7 — Sam" labels pick up "Answer:" on the next renumber."""
+    deck = FakeDeck([("#1 — Amy", "a"), ("#2", "b")])
+    with patch("weekly_slides_bot.execute_with_retry", side_effect=lambda r: r.execute()):
+        renumber_slides(deck, "pres", named=True)
+
+    assert deck.labels() == ["#1 — Answer: Amy", "#2 — Answer:"]

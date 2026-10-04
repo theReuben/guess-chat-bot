@@ -31,7 +31,7 @@ When a mod updates the submissions channel description to `Current Guess Chat: <
 - **Clickable hyperlinks** — URLs in submission text are automatically converted to clickable hyperlinks on the slides.
 - **Markdown-tolerant detection** — `GUESS CHAT` and `SUBMISSION` prefixes are recognised even with leading markdown formatting (headings, bold, italic), e.g. `# GUESS CHAT` or `**SUBMISSION**`.
 - **Display name resolution** — the bot fetches each submitter's guild member profile to use their server nickname (`display_name`) instead of their username.
-- **Shuffled, numbered slides** — slides are shuffled (in the same order for both decks) so the order doesn't reveal who posted first, and numbered (`#7` anonymous, `#7 — Sam` named) so chat can refer to them while guessing.
+- **Shuffled, numbered slides** — slides are shuffled (in the same order for both decks) so the order doesn't reveal who posted first, and numbered (`#7 — Answer:` anonymous, `#7 — Answer: Sam` named) so chat can refer to them while guessing.
 - **Incremental updates** — if the bot runs again in the same round, it adds only the new submissions, each at a random position, and renumbers the decks. Numbers can therefore shift if submissions arrive after the decks have been shared.
 - **Duplicate prevention** — processed message IDs are stored in state; only the latest submission per author is kept.
 - **Auto-posting** — posts results directly to a Discord channel.

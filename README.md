@@ -25,8 +25,9 @@ When a mod updates the submissions channel description to `Current Guess Chat: <
 - **Mod channel confirmation** — after posting a new announcement, sends a confirmation to the mod channel with `@Mods`, the new theme, a link to the posted message, and asks whether there are any extras to add.
 - **Friday reminder** — if the topic hasn't changed by the Friday run, sends a reminder to the mod channel asking if there's a new guess chat this week.
 - **Error routing** — processing errors (e.g. image upload failures) are grouped into a single message in the mod channel when configured, falling back to the results channel.
-- **Image support** — Discord attachment images are re-uploaded to Google Drive (to avoid CDN link expiration) and laid out on each slide (up to four; three images get one large and two small).
-- **YouTube video embedding** — YouTube links in submissions are detected and embedded as playable videos on the slide (first video only; used when no image attachments are present).
+- **Image support** — Discord attachment images (up to four) are re-uploaded to Google Drive (to avoid CDN link expiration) and placed on the slide at their natural shape.
+- **Space-filling layout** — each slide's text and media are sized to fill the deck's actual page. The bot tries text beside or above the media and keeps the split that best balances big pictures against readable text (up to 54pt, preferring whole lines over wrapped list items). Images are packed into whichever rows or columns cover the most space at similar sizes.
+- **YouTube video embedding** — YouTube links in submissions are detected and embedded as playable 16:9 videos on the slide (first video only; used when no image attachments are present).
 - **Clickable hyperlinks** — URLs in submission text are automatically converted to clickable hyperlinks on the slides.
 - **Markdown-tolerant detection** — `GUESS CHAT` and `SUBMISSION` prefixes are recognised even with leading markdown formatting (headings, bold, italic), e.g. `# GUESS CHAT` or `**SUBMISSION**`.
 - **Display name resolution** — the bot fetches each submitter's guild member profile to use their server nickname (`display_name`) instead of their username.
@@ -108,7 +109,7 @@ The bot can automatically generate fun facts about each round's submissions usin
 
 1. Create a new Google Slides presentation with **3 slides**:
    - **Slide 1 (Title)**: add a text box containing `{{TOPIC}}` — this will be replaced with the round topic. Optionally add a text box containing `{{FUNFACTS}}` — this will be filled with LLM-generated fun facts about the submissions (requires `GEMINI_API_KEY`; cleared if the feature is disabled).
-   - **Slide 2 (Submission template)**: add text boxes containing `{{AUTHOR}}` and `{{BODY}}` — these are replaced for each submission; this slide is duplicated once per submission.
+   - **Slide 2 (Submission template)**: add text boxes containing `{{AUTHOR}}` and `{{BODY}}` — these are replaced for each submission; this slide is duplicated once per submission. Place `{{AUTHOR}}` at the top: everything below it is laid out by the bot, so the `{{BODY}}` box's position, size and font size are overridden (its font family and colour are kept). Any page size works.
    - **Slide 3 (End)**: a static closing slide — no modifications.
 2. The presentation should already be accessible under your Google account (the one used for OAuth).
 3. Copy the presentation ID from the URL (`TEMPLATE_DECK_ID`).

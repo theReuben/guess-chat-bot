@@ -15,7 +15,9 @@ os.environ.setdefault("TEMPLATE_DECK_ID", "tpl")
 
 from googleapiclient.errors import HttpError
 
-from weekly_slides_bot import _insert_images, append_slides, build_deck
+from weekly_slides_bot import Box, UploadedImage, _insert_images, append_slides, build_deck
+
+_BOXES = [Box(0, 0, 100, 100), Box(110, 0, 100, 100)]
 
 
 def _make_http_error(status: int, body: str = "") -> HttpError:
@@ -79,7 +81,7 @@ def _mock_slides_svc(batch_update_side_effect=None):
 class TestBuildDeckImageInsertionError:
     """build_deck must not crash when inserting images into slides fails."""
 
-    @patch("weekly_slides_bot.upload_image_to_drive", return_value="https://drive.google.com/uc?id=123")
+    @patch("weekly_slides_bot.upload_image_to_drive", return_value=UploadedImage("https://drive.google.com/uc?id=123", 1.0))
     def test_build_deck_error_message_nonempty_for_empty_str_exception(self, _upload):
         """When str(exc) is empty, the error issue must still contain useful info."""
         call_count = {"n": 0}
@@ -160,7 +162,7 @@ class TestBuildDeckImageInsertionError:
         assert not issue.endswith(": ")
         assert "Exception()" in issue
 
-    @patch("weekly_slides_bot.upload_image_to_drive", return_value="https://drive.google.com/uc?id=123")
+    @patch("weekly_slides_bot.upload_image_to_drive", return_value=UploadedImage("https://drive.google.com/uc?id=123", 1.0))
     def test_build_deck_continues_on_image_http_error(self, _upload):
         """An HttpError during image insertion should be caught, not raised."""
         call_count = {"n": 0}
@@ -243,7 +245,7 @@ class TestBuildDeckImageInsertionError:
 class TestAppendSlidesImageInsertionError:
     """append_slides must not crash when inserting images into slides fails."""
 
-    @patch("weekly_slides_bot.upload_image_to_drive", return_value="https://drive.google.com/uc?id=123")
+    @patch("weekly_slides_bot.upload_image_to_drive", return_value=UploadedImage("https://drive.google.com/uc?id=123", 1.0))
     def test_append_slides_continues_on_image_http_error(self, _upload):
         """An HttpError during image insertion should be caught, not raised."""
         call_count = {"n": 0}
@@ -252,11 +254,10 @@ class TestAppendSlidesImageInsertionError:
         def batch_side_effect(*args, **kwargs):
             call_count["n"] += 1
             req = MagicMock()
+            requests_sent = (kwargs.get("body") or {}).get("requests", [])
 
             def execute():
-                # The image insertion is the last batchUpdate call for a submission
-                # in append_slides: dup, move, clear+resize, text replace, image
-                if call_count["n"] == 5:
+                if any("createImage" in r for r in requests_sent):
                     raise error
                 return {
                     "replies": [{"duplicateObject": {"objectId": "new_slide_1"}}]
@@ -358,13 +359,13 @@ class TestInsertImagesHelper:
         """No errors returned when batch insertion succeeds."""
         svc = MagicMock()
         svc.presentations().batchUpdate().execute.return_value = {}
-        result = _insert_images(svc, "pres", "slide1", ["https://img/1"], True, "A")
+        result = _insert_images(svc, "pres", "slide1", ["https://img/1"], _BOXES, "A")
         assert result == []
 
     def test_returns_empty_when_no_urls(self):
         """No errors returned for empty URL list."""
         svc = MagicMock()
-        result = _insert_images(svc, "pres", "slide1", [], True, "A")
+        result = _insert_images(svc, "pres", "slide1", [], [], "A")
         assert result == []
 
     def test_fallback_succeeds_returns_empty(self):
@@ -382,7 +383,7 @@ class TestInsertImagesHelper:
 
         svc = MagicMock()
         svc.presentations().batchUpdate.side_effect = side_effect
-        result = _insert_images(svc, "pres", "slide1", ["https://img/1"], True, "A")
+        result = _insert_images(svc, "pres", "slide1", ["https://img/1"], _BOXES, "A")
         assert result == []
 
     def test_fallback_fails_returns_errors(self):
@@ -394,7 +395,7 @@ class TestInsertImagesHelper:
 
         svc = MagicMock()
         svc.presentations().batchUpdate.side_effect = side_effect
-        result = _insert_images(svc, "pres", "slide1", ["https://img/1"], True, "A")
+        result = _insert_images(svc, "pres", "slide1", ["https://img/1"], _BOXES, "A")
         assert len(result) == 1
         assert "permanent fail" in result[0]
 
@@ -420,7 +421,7 @@ class TestInsertImagesHelper:
         svc.presentations().batchUpdate.side_effect = side_effect
         result = _insert_images(
             svc, "pres", "slide1",
-            ["https://img/1", "https://img/2"], True, "A",
+            ["https://img/1", "https://img/2"], _BOXES, "A",
         )
         assert len(result) == 1
         assert "img2 fail" in result[0]
@@ -434,7 +435,7 @@ class TestInsertImagesHelper:
 
         svc = MagicMock()
         svc.presentations().batchUpdate.side_effect = side_effect
-        result = _insert_images(svc, "pres", "slide1", ["https://img/1"], True, "A")
+        result = _insert_images(svc, "pres", "slide1", ["https://img/1"], _BOXES, "A")
         assert len(result) == 1
         assert "Exception()" in result[0]
 
@@ -456,9 +457,58 @@ class TestUploadImageUrl:
             {},                # permissions().create()
         ]
 
-        cache: dict[str, str] = {}
+        cache: dict = {}
         result = upload_image_to_drive(MagicMock(), "https://cdn.discord.com/img.png", cache)
         assert result is not None
-        assert "lh3.googleusercontent.com" in result
-        assert "abc123" in result
-        assert "export=download" not in result
+        assert "lh3.googleusercontent.com" in result.url
+        assert "abc123" in result.url
+        assert "export=download" not in result.url
+        # Unreadable image data falls back to a square aspect.
+        assert result.aspect == 1.0
+
+
+class TestImageAspect:
+    """The aspect ratio comes from the image itself, as it will be displayed."""
+
+    @staticmethod
+    def _png(w: int, h: int, orientation: int | None = None) -> bytes:
+        import io
+        from PIL import Image
+
+        img = Image.new("RGB", (w, h))
+        buf = io.BytesIO()
+        if orientation is None:
+            img.save(buf, format="JPEG")
+        else:
+            exif = img.getexif()
+            exif[0x0112] = orientation
+            img.save(buf, format="JPEG", exif=exif)
+        return buf.getvalue()
+
+    def test_reads_width_over_height(self):
+        from weekly_slides_bot import _image_aspect
+
+        assert _image_aspect(self._png(300, 100)) == 3.0
+
+    def test_quarter_turn_exif_rotation_swaps_the_sides(self):
+        from weekly_slides_bot import _image_aspect
+
+        assert _image_aspect(self._png(300, 100, orientation=6)) == pytest.approx(1 / 3)
+
+    def test_unreadable_data_is_square(self):
+        from weekly_slides_bot import _image_aspect
+
+        assert _image_aspect(b"not an image") == 1.0
+
+    @patch("weekly_slides_bot.execute_with_retry", side_effect=[{"id": "f1"}, {}])
+    @patch("weekly_slides_bot.requests.get")
+    def test_upload_reports_the_aspect_and_caches_it(self, mock_get, _exec):
+        from weekly_slides_bot import upload_image_to_drive
+
+        mock_get.return_value = MagicMock(content=self._png(200, 400), headers={"content-type": "image/jpeg"})
+        cache: dict = {}
+        first = upload_image_to_drive(MagicMock(), "https://cdn/x.jpg", cache)
+        again = upload_image_to_drive(MagicMock(), "https://cdn/x.jpg", cache)
+
+        assert first == again == UploadedImage("https://lh3.googleusercontent.com/d/f1", 0.5)
+        mock_get.assert_called_once()

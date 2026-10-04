@@ -287,3 +287,27 @@ class TestFullMarkdownScenario:
         submissions = first_call.kwargs.get("submissions") or first_call.args[4]
         assert len(submissions) == 1
         assert submissions[0]["body"] == "Magikarp because it's useless"
+
+
+class TestSubmissionSeparator:
+    """A separator after SUBMISSION is not part of the answer."""
+
+    @pytest.mark.parametrize("content, body", [
+        ("SUBMISSION: Maine Coon", "Maine Coon"),
+        ("SUBMISSION:\nKirby\nYoshi", "Kirby\nYoshi"),
+        ("**SUBMISSION:** Maine Coon", "Maine Coon"),
+        ("**SUBMISSION**: Maine Coon", "Maine Coon"),
+        ("SUBMISSION - Maine Coon", "Maine Coon"),
+        ("SUBMISSION — Maine Coon", "Maine Coon"),
+        ("SUBMISSION Maine Coon", "Maine Coon"),
+        ("SUBMISSION -1 degrees", "-1 degrees"),
+    ])
+    def test_separator_is_dropped(self, content, body):
+        from weekly_slides_bot import _SUBMISSION_RE
+
+        assert _SUBMISSION_RE.match(content).group(2).strip() == body
+
+    def test_dash_inside_the_answer_survives(self):
+        from weekly_slides_bot import _SUBMISSION_RE
+
+        assert _SUBMISSION_RE.match("SUBMISSION: Pizza - food").group(2) == "Pizza - food"

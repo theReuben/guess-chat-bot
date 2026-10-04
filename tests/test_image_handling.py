@@ -1,4 +1,5 @@
-"""Tests for image layout in _image_requests and image-only submission handling."""
+"""Tests for slide layout: page size, text fitting, media packing and the
+requests that apply a layout, plus image-only submission handling."""
 
 from __future__ import annotations
 
@@ -15,139 +16,291 @@ os.environ.setdefault("TEMPLATE_DECK_ID", "tpl")
 
 from weekly_slides_bot import (
     _AUTHOR_BAR_PT,
-    _DEFAULT_FONT_PT,
-    _IMG_MARGIN_PT,
+    _GAP_PT,
+    _MARGIN_PT,
+    _MAX_FONT_PT,
     _MIN_FONT_PT,
     _PT,
-    _SLIDE_H_PT,
-    _SLIDE_W_PT,
-    _TEXT_IMG_GAP_PT,
-    _TEXT_SPLIT_PT,
-    _body_font_size_pt,
+    Box,
+    _arrange_media,
     _body_resize_requests,
+    _fit_text,
     _image_requests,
+    _line_count,
+    _page_size_pt,
     _text_fit_requests,
+    _video_requests,
     generate_slides,
+    plan_slide_layout,
 )
 
-_SLIDE_ID = "slide1"
-_URLS = [f"https://example.com/img{i}.png" for i in range(4)]
+# The current template's page: 960×540pt, content starting below the author label.
+_W, _H, _TOP = 960, 540, 94
+_AREA = Box(_MARGIN_PT, _TOP, _W - 2 * _MARGIN_PT, _H - _TOP - _MARGIN_PT)
 
 
-class TestImageRequestsEmpty:
-    def test_no_urls_returns_empty(self):
-        assert _image_requests(_SLIDE_ID, []) == []
-
-    def test_no_urls_returns_empty_image_only(self):
-        assert _image_requests(_SLIDE_ID, [], has_text=False) == []
-
-
-class TestImageRequestsHasText:
-    """Images must stay within the right portion of the slide."""
-
-    def _reqs(self, count: int) -> list[dict]:
-        return _image_requests(_SLIDE_ID, _URLS[:count], has_text=True)
-
-    def test_one_image_single_request(self):
-        assert len(self._reqs(1)) == 1
-
-    def test_two_images_two_requests(self):
-        assert len(self._reqs(2)) == 2
-
-    def test_four_images_four_requests(self):
-        assert len(self._reqs(4)) == 4
-
-    def test_more_than_four_capped(self):
-        assert len(_image_requests(_SLIDE_ID, _URLS + ["extra"], has_text=True)) == 4
-
-    def test_images_start_in_right_half(self):
-        """All images must start at or past the text/image split."""
-        for req in self._reqs(4):
-            props = req["createImage"]["elementProperties"]
-            translate_x_pt = props["transform"]["translateX"] // _PT
-            assert translate_x_pt >= _TEXT_SPLIT_PT, f"translateX {translate_x_pt}pt is in the text area"
-
-    def test_images_stay_within_slide_width(self):
-        """Right edge of every image must not exceed slide width."""
-        for req in self._reqs(4):
-            props = req["createImage"]["elementProperties"]
-            left_pt = props["transform"]["translateX"] // _PT
-            w_pt = props["size"]["width"]["magnitude"] // _PT
-            assert left_pt + w_pt <= _SLIDE_W_PT, (
-                f"Image right edge {left_pt + w_pt}pt exceeds slide width {_SLIDE_W_PT}pt"
-            )
-
-    def test_images_stay_within_slide_height(self):
-        """Bottom edge of every image must not exceed slide height."""
-        for req in self._reqs(4):
-            props = req["createImage"]["elementProperties"]
-            top_pt = props["transform"]["translateY"] // _PT
-            h_pt = props["size"]["height"]["magnitude"] // _PT
-            assert top_pt + h_pt <= _SLIDE_H_PT, (
-                f"Image bottom edge {top_pt + h_pt}pt exceeds slide height {_SLIDE_H_PT}pt"
-            )
-
-    def test_slide_id_on_all_requests(self):
-        for req in self._reqs(2):
-            assert req["createImage"]["elementProperties"]["pageObjectId"] == _SLIDE_ID
+def _inside(box: Box, area: Box, tol: float = 0.01) -> bool:
+    return (
+        box.x >= area.x - tol and box.y >= area.y - tol
+        and box.x + box.w <= area.x + area.w + tol
+        and box.y + box.h <= area.y + area.h + tol
+    )
 
 
-class TestImageRequestsNoText:
-    """Image-only submissions must use the full available slide area."""
-
-    def _reqs(self, count: int) -> list[dict]:
-        return _image_requests(_SLIDE_ID, _URLS[:count], has_text=False)
-
-    def test_one_image_single_request(self):
-        assert len(self._reqs(1)) == 1
-
-    def test_four_images_four_requests(self):
-        assert len(self._reqs(4)) == 4
-
-    def test_images_start_near_left_margin(self):
-        """First column must start close to the left margin."""
-        for req in self._reqs(1):
-            props = req["createImage"]["elementProperties"]
-            translate_x_pt = props["transform"]["translateX"] // _PT
-            assert translate_x_pt == _IMG_MARGIN_PT
-
-    def test_images_stay_within_slide_width(self):
-        for req in self._reqs(4):
-            props = req["createImage"]["elementProperties"]
-            left_pt = props["transform"]["translateX"] // _PT
-            w_pt = props["size"]["width"]["magnitude"] // _PT
-            assert left_pt + w_pt <= _SLIDE_W_PT
-
-    def test_images_stay_within_slide_height(self):
-        for req in self._reqs(4):
-            props = req["createImage"]["elementProperties"]
-            top_pt = props["transform"]["translateY"] // _PT
-            h_pt = props["size"]["height"]["magnitude"] // _PT
-            assert top_pt + h_pt <= _SLIDE_H_PT
-
-    def test_single_image_wider_than_with_text(self):
-        """A single image-only image should be wider than in text+image mode."""
-        req_no_text = self._reqs(1)[0]
-        req_has_text = _image_requests(_SLIDE_ID, _URLS[:1], has_text=True)[0]
-        w_no_text = req_no_text["createImage"]["elementProperties"]["size"]["width"]["magnitude"]
-        w_has_text = req_has_text["createImage"]["elementProperties"]["size"]["width"]["magnitude"]
-        assert w_no_text > w_has_text
-
-    def test_starts_at_author_bar_y(self):
-        """Images should start below the author bar."""
-        for req in self._reqs(1):
-            top_pt = req["createImage"]["elementProperties"]["transform"]["translateY"] // _PT
-            assert top_pt == _AUTHOR_BAR_PT
+def _overlap(a: Box, b: Box) -> bool:
+    return not (
+        a.x + a.w <= b.x + 0.01 or b.x + b.w <= a.x + 0.01
+        or a.y + a.h <= b.y + 0.01 or b.y + b.h <= a.y + 0.01
+    )
 
 
-class TestNoImagesDoesNotOverlapText:
-    """With images present, no image should overlap the text area (x < split)."""
+# ---------------------------------------------------------------------------
+# Page size
+# ---------------------------------------------------------------------------
 
-    def test_images_do_not_invade_text_area_with_text(self):
-        reqs = _image_requests(_SLIDE_ID, _URLS[:4], has_text=True)
-        for req in reqs:
-            left_pt = req["createImage"]["elementProperties"]["transform"]["translateX"] // _PT
-            assert left_pt >= _TEXT_SPLIT_PT
+
+class TestPageSize:
+    def test_reads_the_decks_page_size(self):
+        pres = {"pageSize": {"width": {"magnitude": 12192000}, "height": {"magnitude": 6858000}}}
+        assert _page_size_pt(pres) == (960, 540)
+
+    def test_falls_back_to_the_standard_slide(self):
+        assert _page_size_pt({}) == (720, 405)
+
+
+# ---------------------------------------------------------------------------
+# Text fitting
+# ---------------------------------------------------------------------------
+
+
+class TestLineCount:
+    def test_each_paragraph_is_at_least_one_line(self):
+        assert _line_count("a\nb\n\nc", 100) == 4
+
+    def test_words_wrap_whole(self):
+        # "aaaa" is about 2em; four of them with spaces need two 5em lines.
+        assert _line_count("aaaa aaaa aaaa aaaa", 5) == 2
+
+    def test_a_word_longer_than_a_line_breaks(self):
+        assert _line_count("a" * 40, 5) >= 4
+
+
+class TestFitText:
+    def test_short_text_gets_the_maximum_size(self):
+        assert _fit_text("Pizza", 900, 400) == (_MAX_FONT_PT, False)
+
+    def test_empty_text_needs_no_room(self):
+        assert _fit_text("", 10, 10) == (_MAX_FONT_PT, False)
+
+    def test_longer_text_gets_a_smaller_font(self):
+        short, _ = _fit_text("Maine Coon", 400, 400)
+        long, _ = _fit_text("Maine Coon " * 30, 400, 400)
+        assert long < short
+
+    def test_never_below_the_minimum(self):
+        assert _fit_text("word " * 2000, 200, 100)[0] == _MIN_FONT_PT
+
+    def test_fitted_text_fits(self):
+        text = "Penguin - Mario Kart World\nYellow Deck - Balatro\nShiki - TWEWY"
+        font, _ = _fit_text(text, 300, 200)
+        lines = _line_count(text, (300 - 2 * 7.2) / font)
+        assert lines * font * 1.2 <= 200 - 2 * 7.2
+
+    def test_prefers_whole_lines_over_slightly_larger_wrapped_text(self):
+        text = "Penguin - Mario Kart World\nYellow Deck - Balatro"
+        font, wraps = _fit_text(text, 600, 400)
+        assert not wraps
+        assert _line_count(text, (600 - 2 * 7.2) / font) == 2
+
+    def test_wraps_when_whole_lines_would_be_tiny(self):
+        text = "A really quite long single line answer that goes on and on and on"
+        _, wraps = _fit_text(text, 250, 400)
+        assert wraps
+
+
+# ---------------------------------------------------------------------------
+# Media packing
+# ---------------------------------------------------------------------------
+
+
+class TestArrangeMedia:
+    def test_no_media(self):
+        assert _arrange_media([], _AREA) == ([], 0.0)
+
+    @pytest.mark.parametrize("aspects", [
+        [1.0], [16 / 9], [0.5], [1.5, 0.7], [1.0, 0.7, 0.45], [0.9, 1.5, 1.45, 1.37], [3.0, 3.0, 0.3],
+    ])
+    def test_boxes_stay_inside_and_do_not_overlap(self, aspects):
+        boxes, covered = _arrange_media(aspects, _AREA)
+        assert len(boxes) == len(aspects)
+        assert all(_inside(b, _AREA) for b in boxes)
+        assert not any(_overlap(a, b) for i, a in enumerate(boxes) for b in boxes[i + 1:])
+        assert covered == pytest.approx(sum(b.w * b.h for b in boxes))
+
+    @pytest.mark.parametrize("aspects", [[1.0], [0.45, 1.5, 2.0], [0.7, 0.7, 0.7, 0.7]])
+    def test_items_keep_their_shape(self, aspects):
+        boxes, _ = _arrange_media(aspects, _AREA)
+        for aspect, box in zip(aspects, boxes):
+            assert box.w / box.h == pytest.approx(aspect)
+
+    def test_a_single_image_touches_two_opposite_edges(self):
+        (box,), _ = _arrange_media([1.0], _AREA)
+        assert box.h == pytest.approx(_AREA.h)  # square in a wide area: full height
+        assert box.x + box.w / 2 == pytest.approx(_AREA.x + _AREA.w / 2)  # centred
+
+    def test_tall_images_go_side_by_side(self):
+        boxes, _ = _arrange_media([0.5, 0.5], _AREA)
+        assert boxes[0].y == pytest.approx(boxes[1].y)
+        assert boxes[1].x >= boxes[0].x + boxes[0].w + _GAP_PT - 0.01
+
+    def test_wide_images_stack_in_a_narrow_area(self):
+        narrow = Box(0, 0, 300, 600)
+        boxes, _ = _arrange_media([2.0, 2.0], narrow)
+        assert boxes[0].x == pytest.approx(boxes[1].x)
+        assert boxes[1].y > boxes[0].y
+
+    def test_similar_images_get_similar_sizes(self):
+        boxes, _ = _arrange_media([1.4, 0.7, 0.67], _AREA)
+        heights = [b.h for b in boxes]
+        assert max(heights) / min(heights) < 1.5
+
+
+# ---------------------------------------------------------------------------
+# Whole-slide planning
+# ---------------------------------------------------------------------------
+
+
+class TestPlanSlideLayout:
+    def test_text_only_uses_the_whole_content_area(self):
+        layout = plan_slide_layout(_W, _H, _TOP, "Maine Coon", [])
+        assert layout.text_box == _AREA
+        assert layout.media_boxes == []
+        assert layout.font_pt == _MAX_FONT_PT
+
+    def test_media_only_uses_the_whole_content_area(self):
+        layout = plan_slide_layout(_W, _H, _TOP, "", [1.0, 1.0])
+        assert len(layout.media_boxes) == 2
+        assert all(_inside(b, _AREA) for b in layout.media_boxes)
+
+    def test_uses_the_real_page_size(self):
+        small = plan_slide_layout(720, 405, _TOP, "", [16 / 9])
+        large = plan_slide_layout(960, 540, _TOP, "", [16 / 9])
+        assert large.media_boxes[0].w > small.media_boxes[0].w
+        assert large.media_boxes[0].x + large.media_boxes[0].w > 720
+
+    @pytest.mark.parametrize("text, aspects", [
+        ("Pizza - food", [1.45]),
+        ("Penguin - Mario Kart World\nYellow Deck - Balatro\nShiki - TWEWY", [1.0, 0.7, 0.45]),
+        ("word " * 120, [1.0, 1.0]),
+        ("This song - it lives in my head rent free", [16 / 9]),
+    ])
+    def test_text_and_media_never_overlap(self, text, aspects):
+        layout = plan_slide_layout(_W, _H, _TOP, text, aspects)
+        assert _inside(layout.text_box, _AREA)
+        assert all(_inside(b, _AREA) for b in layout.media_boxes)
+        assert not any(_overlap(layout.text_box, b) for b in layout.media_boxes)
+
+    def test_a_short_answer_leaves_most_of_the_room_to_its_picture(self):
+        layout = plan_slide_layout(_W, _H, _TOP, "Pizza - food", [1.45])
+        (img,) = layout.media_boxes
+        assert img.w * img.h > 0.5 * _AREA.w * _AREA.h
+        assert layout.font_pt >= 28
+
+    def test_a_list_answer_is_not_broken_mid_line(self):
+        text = "Penguin - Mario Kart World\nYellow Deck - Balatro\nShiki - TWEWY"
+        layout = plan_slide_layout(_W, _H, _TOP, text, [1.0, 0.7, 0.45])
+        _, wraps = _fit_text(text, layout.text_box.w, layout.text_box.h)
+        assert not wraps
+
+    def test_short_text_only_is_centred(self):
+        assert plan_slide_layout(_W, _H, _TOP, "Maine Coon", []).centred
+
+    def test_a_wrapping_paragraph_stays_left_aligned(self):
+        assert not plan_slide_layout(_W, _H, _TOP, "a fairly long sentence " * 15, []).centred
+
+    def test_a_short_list_above_the_pictures_is_centred(self):
+        text = "Penguin - Mario Kart World\nYellow Deck - Balatro\nShiki - TWEWY"
+        layout = plan_slide_layout(_W, _H, _TOP, text, [1.0, 0.7, 0.45])
+        assert layout.text_box.w == _AREA.w  # stacked above the pictures
+        assert layout.centred
+
+    def test_text_beside_the_pictures_stays_left_aligned(self):
+        layout = plan_slide_layout(_W, _H, _TOP, "Pizza - food", [1.45])
+        assert layout.text_box.w < _AREA.w  # in a column beside the picture
+        assert not layout.centred
+
+    def test_a_long_answer_claims_more_room(self):
+        short = plan_slide_layout(_W, _H, _TOP, "Pizza", [1.0])
+        long = plan_slide_layout(_W, _H, _TOP, "a fairly long sentence " * 15, [1.0])
+        area = lambda b: b.w * b.h  # noqa: E731
+        assert area(long.text_box) > area(short.text_box)
+
+
+# ---------------------------------------------------------------------------
+# Requests that apply a layout
+# ---------------------------------------------------------------------------
+
+
+class TestMediaRequests:
+    def test_images_are_created_in_their_boxes(self):
+        boxes = [Box(10, 20, 100, 50), Box(120, 20, 80, 50)]
+        reqs = _image_requests("s1", ["https://a", "https://b"], boxes)
+        assert [r["createImage"]["url"] for r in reqs] == ["https://a", "https://b"]
+        props = reqs[1]["createImage"]["elementProperties"]
+        assert props["pageObjectId"] == "s1"
+        assert props["size"]["width"]["magnitude"] == 80 * _PT
+        assert props["transform"]["translateX"] == 120 * _PT
+
+    def test_only_the_first_video_is_embedded(self):
+        reqs = _video_requests("s1", ["v1", "v2"], Box(0, 0, 160, 90))
+        assert len(reqs) == 1
+        assert reqs[0]["createVideo"]["id"] == "v1"
+        assert reqs[0]["createVideo"]["source"] == "YOUTUBE"
+
+    def test_no_video_ids(self):
+        assert _video_requests("s1", [], Box(0, 0, 1, 1)) == []
+
+
+class TestBodyRequests:
+    _ELEMS = [
+        {
+            "objectId": "author_elem",
+            "shape": {"text": {"textElements": [{"textRun": {"content": "#1 — Sam"}}]}},
+            "size": {"width": {"magnitude": 300 * _PT}, "height": {"magnitude": 30 * _PT}},
+            "transform": {"translateX": 0, "translateY": 10 * _PT},
+        },
+        {
+            "objectId": "body_elem",
+            "shape": {"text": {"textElements": [{"textRun": {"content": "answer"}}]}},
+            "size": {"width": {"magnitude": 400 * _PT}, "height": {"magnitude": 200 * _PT}},
+            "transform": {"translateX": 0, "translateY": (_AUTHOR_BAR_PT + 5) * _PT},
+        },
+    ]
+
+    def test_body_is_moved_and_scaled_to_its_box(self):
+        transform, alignment = _body_resize_requests(self._ELEMS, Box(24, 94, 800, 100))
+        t = transform["updatePageElementTransform"]
+        assert t["objectId"] == "body_elem"
+        assert t["applyMode"] == "ABSOLUTE"
+        assert t["transform"]["scaleX"] == pytest.approx(2.0)
+        assert t["transform"]["scaleY"] == pytest.approx(0.5)
+        assert t["transform"]["translateY"] == 94 * _PT
+        assert alignment["updateShapeProperties"]["shapeProperties"]["contentAlignment"] == "MIDDLE"
+
+    def test_no_body_element(self):
+        assert _body_resize_requests([], Box(0, 0, 1, 1)) == []
+
+    def test_font_size_is_always_set(self):
+        style, _ = _text_fit_requests("body_elem", 36)
+        assert style["updateTextStyle"]["style"]["fontSize"] == {"magnitude": 36, "unit": "PT"}
+
+    def test_alignment_is_always_set(self):
+        """Appended slides copy an existing slide, so left must be set explicitly too."""
+        _, centred = _text_fit_requests("body_elem", 36, centred=True)
+        _, left = _text_fit_requests("body_elem", 36)
+        assert centred["updateParagraphStyle"]["style"]["alignment"] == "CENTER"
+        assert left["updateParagraphStyle"]["style"]["alignment"] == "START"
+        assert left["updateParagraphStyle"]["textRange"] == {"type": "ALL"}
 
 
 class TestImageOnlySubmissionBody:
@@ -258,207 +411,3 @@ class TestImageOnlySubmissionBody:
         assert submissions[0]["images"] == ["https://cdn.discord.com/img.png"]
 
 
-class TestBodyResizeRequests:
-    """_body_resize_requests must resize the body text box for all submissions."""
-
-    # Simulate a template-style slide with an author bar and a body text box.
-    # Author bar: y=0, height=55pt; body box: y=55pt, occupying the left 400pt.
-    _ELEMS = [
-        {
-            "objectId": "author_elem",
-            "shape": {"shapeType": "TEXT_BOX"},
-            "size": {
-                "width": {"magnitude": 720 * _PT},
-                "height": {"magnitude": _AUTHOR_BAR_PT * _PT},
-            },
-            "transform": {
-                "scaleX": 1,
-                "scaleY": 1,
-                "translateX": 0,
-                "translateY": 0,
-                "unit": "EMU",
-            },
-        },
-        {
-            "objectId": "body_elem",
-            "shape": {"shapeType": "TEXT_BOX"},
-            "size": {
-                "width": {"magnitude": 400 * _PT},
-                "height": {"magnitude": 314 * _PT},
-            },
-            "transform": {
-                "scaleX": 1,
-                "scaleY": 1,
-                "translateX": 0,
-                "translateY": _AUTHOR_BAR_PT * _PT,
-                "unit": "EMU",
-            },
-        },
-    ]
-
-    def test_returns_resize_when_has_images(self):
-        reqs = _body_resize_requests(self._ELEMS, has_images=True)
-        assert len(reqs) == 2
-
-    def test_returns_empty_for_no_elements(self):
-        assert _body_resize_requests([], has_images=False) == []
-
-    def test_returns_empty_when_no_elements_below_author_bar(self):
-        """No qualifying elements (all shapes are above the author bar)."""
-        only_author = [self._ELEMS[0]]  # only the author bar element (y=0)
-        assert _body_resize_requests(only_author, has_images=False) == []
-
-    def test_returns_transform_and_alignment_requests(self):
-        reqs = _body_resize_requests(self._ELEMS, has_images=False)
-        assert len(reqs) == 2
-        assert "updatePageElementTransform" in reqs[0]
-        assert "updateShapeProperties" in reqs[1]
-
-    def test_content_alignment_top(self):
-        reqs = _body_resize_requests(self._ELEMS, has_images=False)
-        shape_req = reqs[1]["updateShapeProperties"]
-        assert shape_req["shapeProperties"]["contentAlignment"] == "TOP"
-        assert shape_req["fields"] == "contentAlignment"
-
-    def test_transform_has_zero_shear(self):
-        transform = _body_resize_requests(self._ELEMS, has_images=False)[0][
-            "updatePageElementTransform"
-        ]["transform"]
-        assert transform["shearX"] == 0
-        assert transform["shearY"] == 0
-
-    def test_request_targets_body_element(self):
-        req = _body_resize_requests(self._ELEMS, has_images=False)[0]
-        assert req["updatePageElementTransform"]["objectId"] == "body_elem"
-
-    def test_apply_mode_is_absolute(self):
-        req = _body_resize_requests(self._ELEMS, has_images=False)[0]
-        assert req["updatePageElementTransform"]["applyMode"] == "ABSOLUTE"
-
-    def test_body_element_positioned_below_author(self):
-        transform = _body_resize_requests(self._ELEMS, has_images=False)[0][
-            "updatePageElementTransform"
-        ]["transform"]
-        # Author element: y=0, height=55pt, so bottom = 55pt.
-        # Body should be at author_bottom + 6pt gap = 61pt.
-        expected_y = (_AUTHOR_BAR_PT + 6) * _PT
-        assert transform["translateX"] == _IMG_MARGIN_PT * _PT
-        assert transform["translateY"] == expected_y
-
-    def test_body_element_expanded_to_full_content_width(self):
-        transform = _body_resize_requests(self._ELEMS, has_images=False)[0][
-            "updatePageElementTransform"
-        ]["transform"]
-        elem_w = 400 * _PT  # original body width from _ELEMS
-        expected_scale_x = (_SLIDE_W_PT - 2 * _IMG_MARGIN_PT) * _PT / elem_w
-        assert transform["scaleX"] == pytest.approx(expected_scale_x)
-
-    def test_body_element_wider_than_original_template_area(self):
-        """Rendered width after resize must exceed the original left-half area."""
-        transform = _body_resize_requests(self._ELEMS, has_images=False)[0][
-            "updatePageElementTransform"
-        ]["transform"]
-        elem_w = 400 * _PT
-        rendered_w = elem_w * transform["scaleX"]
-        original_text_area_w = 400 * _PT  # typical left-half text area
-        assert rendered_w > original_text_area_w
-
-    def test_with_images_constrains_body_to_left(self):
-        """When images are present, body must be constrained to the left portion."""
-        transform = _body_resize_requests(self._ELEMS, has_images=True)[0][
-            "updatePageElementTransform"
-        ]["transform"]
-        elem_w = 400 * _PT
-        rendered_w = elem_w * transform["scaleX"]
-        max_text_w = (_TEXT_SPLIT_PT - _TEXT_IMG_GAP_PT - _IMG_MARGIN_PT) * _PT
-        assert rendered_w == pytest.approx(max_text_w)
-
-    def test_with_images_body_does_not_overlap_image_area(self):
-        """Body right edge must not reach the image split point."""
-        transform = _body_resize_requests(self._ELEMS, has_images=True)[0][
-            "updatePageElementTransform"
-        ]["transform"]
-        elem_w = 400 * _PT
-        rendered_w = elem_w * transform["scaleX"]
-        left = transform["translateX"]
-        right_edge_pt = (left + rendered_w) / _PT
-        assert right_edge_pt <= _TEXT_SPLIT_PT - _TEXT_IMG_GAP_PT
-
-
-class TestBodyFontSize:
-    """Tests for _body_font_size_pt text scaling heuristic."""
-
-    def test_short_text_uses_default(self):
-        assert _body_font_size_pt("Hello world", has_images=False) == _DEFAULT_FONT_PT
-
-    def test_empty_text_uses_default(self):
-        assert _body_font_size_pt("", has_images=False) == _DEFAULT_FONT_PT
-
-    def test_long_text_shrinks(self):
-        long_text = "word " * 500
-        size = _body_font_size_pt(long_text, has_images=False)
-        assert size < _DEFAULT_FONT_PT
-
-    def test_never_below_minimum(self):
-        huge_text = "word " * 5000
-        size = _body_font_size_pt(huge_text, has_images=False)
-        assert size >= _MIN_FONT_PT
-
-    def test_images_shrinks_more(self):
-        """Narrower box with images should produce a smaller font."""
-        text = "word " * 200
-        size_no_img = _body_font_size_pt(text, has_images=False)
-        size_img = _body_font_size_pt(text, has_images=True)
-        assert size_img <= size_no_img
-
-
-class TestTextFitRequests:
-    """Tests for _text_fit_requests."""
-
-    def test_short_text_returns_empty(self):
-        assert _text_fit_requests("elem1", "Hi", has_images=False) == []
-
-    def test_long_text_returns_font_style(self):
-        long_text = "word " * 500
-        reqs = _text_fit_requests("elem1", long_text, has_images=False)
-        assert len(reqs) == 1
-        style_req = reqs[0]["updateTextStyle"]
-        assert style_req["objectId"] == "elem1"
-        assert style_req["textRange"]["type"] == "ALL"
-        assert style_req["style"]["fontSize"]["unit"] == "PT"
-        assert style_req["style"]["fontSize"]["magnitude"] < _DEFAULT_FONT_PT
-
-
-def _boxes(reqs):
-    out = []
-    for r in reqs:
-        props = r["createImage"]["elementProperties"]
-        out.append((
-            props["transform"]["translateX"] / _PT,
-            props["transform"]["translateY"] / _PT,
-            props["size"]["width"]["magnitude"] / _PT,
-            props["size"]["height"]["magnitude"] / _PT,
-        ))
-    return out
-
-
-class TestThreeImageLayout:
-    """Three images fill the area instead of leaving a hole in a 2×2 grid."""
-
-    def test_wide_area_puts_the_first_image_full_height_on_the_left(self):
-        (big, top_right, bottom_right) = _boxes(_image_requests(_SLIDE_ID, _URLS[:3], has_text=False))
-        assert big[2] == top_right[2] == bottom_right[2]  # equal column widths
-        assert big[3] > top_right[3] * 2  # spans both rows
-        assert top_right[0] == bottom_right[0] > big[0]
-        assert bottom_right[1] > top_right[1] == big[1]
-
-    def test_tall_area_puts_the_first_image_full_width_on_top(self):
-        # The image column beside text is narrower than it is tall.
-        (big, bottom_left, bottom_right) = _boxes(_image_requests(_SLIDE_ID, _URLS[:3], has_text=True))
-        assert big[2] > bottom_left[2] * 2  # spans both columns
-        assert bottom_left[1] == bottom_right[1] > big[1]
-        assert bottom_right[0] > bottom_left[0] == big[0]
-
-    def test_two_and_four_images_keep_the_grid(self):
-        four = _boxes(_image_requests(_SLIDE_ID, _URLS, has_text=False))
-        assert len({(w, h) for _, _, w, h in four}) == 1

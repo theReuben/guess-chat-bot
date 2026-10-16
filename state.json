@@ -1,51 +1,22 @@
 {
   "last_announced_topic": "Top 3 Glup Shittos",
-  "marker_id": "1555596340153819259",
-  "topic": "YOUR 3 MAINS",
-  "named_pres_id": "1QmGrU0vRyJaB0CtBrQy-jBIDzWJLp77JlbSq50CBiyc",
-  "anon_pres_id": "1iNuEURh0_yHy6_Uw6GWoCtnU_a2typO2_K4XDY65T2E",
+  "marker_id": "1560619371213365270",
+  "topic": "TOP 3 GLUP SHITTOS",
+  "named_pres_id": "1IgSj6h_PNNSzquehDtFMiurS3a3I9Sz8hyQd0AYB4Jg",
+  "anon_pres_id": "1PzfgSd09u5pKn8V4c8Z6qQntpHhX_miuzmWrW0Uqytw",
   "processed_ids": [
-    "1557455876657385562",
-    "1555606393346728036",
-    "1557517204797263944",
-    "1557430356360298496",
-    "1556213457383325726",
-    "1555600464370737273",
-    "1556979080371503174",
-    "1555997764050223164",
-    "1560411977514352650",
-    "1555728134387802152",
-    "1558044030556831744",
-    "1556082921020854273",
-    "1557290245656150018",
-    "1556987089776803880",
-    "1555736961438974112",
-    "1556391196450881748",
-    "1555601389961486427",
-    "1556555046366216226"
+    "1560649984603328542",
+    "1560621562825281577",
+    "1560656707724779691"
   ],
   "submitters": [
-    "amazingAkita",
-    "DJ D",
     "DuccQuacc",
-    "hush",
-    "Jakedoodle",
-    "Jumble",
-    "Mr_Phenominal20",
-    "Mrs_Phenominal20",
-    "Perseus",
-    "Praesta",
-    "Queen Bee",
-    "StitchedGhost",
-    "Super_Nerd",
-    "Toastedsoup",
-    "Vargna",
     "WaterNymphHalia (Zoro)",
     "Ybarra \ud83c\udf49"
   ],
   "last_run": {
-    "mode": "strim",
-    "at": 1792148414
+    "mode": "preview",
+    "at": 1792182523
   },
   "deadline_ts": 1792751400
 }
